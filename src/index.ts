@@ -172,7 +172,7 @@ const tools = [
   { name: "rotate_access_service_token", description: "Rotate (refresh) an Access service token.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, token_id: { type: "string" } }, required: ["account_id", "token_id"] } },
   { name: "delete_access_service_token", description: "Delete an Access service token.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, token_id: { type: "string" } }, required: ["account_id", "token_id"] } },
 
-  // ── Tunnels (Cloudflare Tunnel / Argo) ──
+  // ── Tunnels ──
   { name: "list_tunnels", description: "List Cloudflare Tunnels (cloudflared) in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, is_deleted: { type: "boolean" } }, required: ["account_id"] } },
   { name: "get_tunnel", description: "Get details of a specific Cloudflare Tunnel.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, tunnel_id: { type: "string" } }, required: ["account_id", "tunnel_id"] } },
   { name: "create_tunnel", description: "Create a Cloudflare Tunnel.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, tunnel_secret: { type: "string", description: "Base64 encoded 32-byte secret" } }, required: ["account_id", "name", "tunnel_secret"] } },
@@ -189,6 +189,22 @@ const tools = [
   { name: "get_api_token", description: "Get details of an API token.", inputSchema: { type: "object", properties: { token_id: { type: "string" } }, required: ["token_id"] } },
   { name: "verify_api_token", description: "Verify the current API token is valid.", inputSchema: { type: "object", properties: {} } },
   { name: "list_account_members", description: "List members of an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+
+  // ── Email Routing ──
+  { name: "get_email_routing_settings", description: "Get Email Routing settings for a zone (enabled status, name, DNS records required).", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "enable_email_routing", description: "Enable Email Routing for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "disable_email_routing", description: "Disable Email Routing for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "list_email_routing_rules", description: "List all Email Routing rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, per_page: { type: "number" }, page: { type: "number" }, enabled: { type: "boolean" } }, required: ["zone_id"] } },
+  { name: "get_email_routing_rule", description: "Get a specific Email Routing rule by ID.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
+  { name: "create_email_routing_rule", description: "Create an Email Routing rule. Matchers define which emails match (e.g. by 'to' address), actions define what happens (forward, drop, worker).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, name: { type: "string", description: "Human-readable rule name" }, enabled: { type: "boolean", description: "Whether the rule is active (default: true)" }, matchers: { type: "array", description: "Array of matcher objects, e.g. [{ type: 'literal', field: 'to', value: 'hello@example.com' }]" }, actions: { type: "array", description: "Array of action objects, e.g. [{ type: 'forward', value: ['dest@example.com'] }] or [{ type: 'drop' }] or [{ type: 'worker', value: ['worker-name'] }]" } }, required: ["zone_id", "matchers", "actions"] } },
+  { name: "update_email_routing_rule", description: "Update an existing Email Routing rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" }, name: { type: "string" }, enabled: { type: "boolean" }, matchers: { type: "array" }, actions: { type: "array" } }, required: ["zone_id", "rule_id"] } },
+  { name: "delete_email_routing_rule", description: "Delete an Email Routing rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
+  { name: "get_catch_all_rule", description: "Get the catch-all Email Routing rule for a zone (handles emails that match no other rule).", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "update_catch_all_rule", description: "Update the catch-all Email Routing rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, enabled: { type: "boolean" }, name: { type: "string" }, matchers: { type: "array", description: "Catch-all matchers, typically [{ type: 'all' }]" }, actions: { type: "array", description: "Actions: forward, drop, or worker" } }, required: ["zone_id", "actions"] } },
+  { name: "list_email_destination_addresses", description: "List verified destination email addresses for Email Routing in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, per_page: { type: "number" }, page: { type: "number" }, verified: { type: "boolean", description: "Filter by verification status" } }, required: ["account_id"] } },
+  { name: "create_email_destination_address", description: "Add a new destination email address for Email Routing. A verification email will be sent.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, email: { type: "string", description: "The destination email address to add and verify" } }, required: ["account_id", "email"] } },
+  { name: "get_email_destination_address", description: "Get details of a specific Email Routing destination address.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, destination_id: { type: "string" } }, required: ["account_id", "destination_id"] } },
+  { name: "delete_email_destination_address", description: "Delete a destination email address from Email Routing.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, destination_id: { type: "string" } }, required: ["account_id", "destination_id"] } },
 ];
 
 // ─────────────────────────────────────────────
@@ -407,6 +423,43 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "verify_api_token": return await cfRequest("/user/tokens/verify");
     case "list_account_members": return await cfRequest(`/accounts/${a.account_id}/members?per_page=50`);
 
+    // Email Routing
+    case "get_email_routing_settings": return await cfRequest(`/zones/${a.zone_id}/email/routing`);
+    case "enable_email_routing": return await cfRequest(`/zones/${a.zone_id}/email/routing/enable`, "POST");
+    case "disable_email_routing": return await cfRequest(`/zones/${a.zone_id}/email/routing/disable`, "POST");
+    case "list_email_routing_rules": {
+      let ep = `/zones/${a.zone_id}/email/routing/rules?per_page=${a.per_page || 50}&page=${a.page || 1}`;
+      if (a.enabled !== undefined) ep += `&enabled=${a.enabled}`;
+      return await cfRequest(ep);
+    }
+    case "get_email_routing_rule": return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/${a.rule_id}`);
+    case "create_email_routing_rule": {
+      const body: Record<string, unknown> = { matchers: a.matchers, actions: a.actions, enabled: a.enabled ?? true };
+      if (a.name) body.name = a.name;
+      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules`, "POST", body);
+    }
+    case "update_email_routing_rule": {
+      const body: Record<string, unknown> = {};
+      ["name","enabled","matchers","actions"].forEach(k => { if (a[k] !== undefined) body[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/${a.rule_id}`, "PUT", body);
+    }
+    case "delete_email_routing_rule": return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/${a.rule_id}`, "DELETE");
+    case "get_catch_all_rule": return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/catch_all`);
+    case "update_catch_all_rule": {
+      const body: Record<string, unknown> = { actions: a.actions, matchers: a.matchers || [{ type: "all" }] };
+      if (a.enabled !== undefined) body.enabled = a.enabled;
+      if (a.name) body.name = a.name;
+      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/catch_all`, "PUT", body);
+    }
+    case "list_email_destination_addresses": {
+      let ep = `/accounts/${a.account_id}/email/routing/addresses?per_page=${a.per_page || 50}&page=${a.page || 1}`;
+      if (a.verified !== undefined) ep += `&verified=${a.verified}`;
+      return await cfRequest(ep);
+    }
+    case "create_email_destination_address": return await cfRequest(`/accounts/${a.account_id}/email/routing/addresses`, "POST", { email: a.email });
+    case "get_email_destination_address": return await cfRequest(`/accounts/${a.account_id}/email/routing/addresses/${a.destination_id}`);
+    case "delete_email_destination_address": return await cfRequest(`/accounts/${a.account_id}/email/routing/addresses/${a.destination_id}`, "DELETE");
+
     default: throw new Error(`Unknown tool: ${name}`);
   }
 }
@@ -420,7 +473,7 @@ async function handleMcpRequest(request: { jsonrpc: string; id?: unknown; method
     let result;
     switch (method) {
       case "initialize":
-        result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "2.0.0" }, capabilities: { tools: {} } };
+        result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "2.1.0" }, capabilities: { tools: {} } };
         break;
       case "notifications/initialized": return null;
       case "tools/list": result = { tools }; break;
@@ -469,11 +522,11 @@ app.post("/messages", async (req: Request, res: Response) => {
 });
 
 app.get("/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok", version: "2.0.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
+  res.json({ status: "ok", version: "2.1.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
 });
 
 app.get("/", (_req: Request, res: Response) => {
-  res.json({ name: "Cloudflare MCP Server", version: "2.0.0", auth: CF_AUTH_TYPE, tools: tools.map(t => t.name), endpoints: { sse: "/sse", messages: "/messages", health: "/health" } });
+  res.json({ name: "Cloudflare MCP Server", version: "2.1.0", auth: CF_AUTH_TYPE, tools: tools.map(t => t.name), endpoints: { sse: "/sse", messages: "/messages", health: "/health" } });
 });
 
-app.listen(PORT, () => console.log(`Cloudflare MCP Server v2.0.0 on port ${PORT} [${tools.length} tools, auth: ${CF_AUTH_TYPE}]`));
+app.listen(PORT, () => console.log(`Cloudflare MCP Server v2.1.0 on port ${PORT} [${tools.length} tools, auth: ${CF_AUTH_TYPE}]`));
