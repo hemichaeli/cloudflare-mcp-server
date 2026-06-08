@@ -3,75 +3,63 @@ import { randomUUID } from "crypto";
 
 const app = express();
 
-// ─────────────────────────────────────────────
-// Auth configuration
-//
-// Option A – API Token (recommended):
-//   CF_AUTH_TYPE=token
-//   CF_API_TOKEN=<your token>
-//
-// Option B – Global API Key:
-//   CF_AUTH_TYPE=global_key
-//   CF_API_EMAIL=<your email>
-//   CF_API_KEY=<your global key>
-// ─────────────────────────────────────────────
 const CF_AUTH_TYPE = process.env.CF_AUTH_TYPE || "token";
 const CF_API_TOKEN = process.env.CF_API_TOKEN || "";
 const CF_API_EMAIL = process.env.CF_API_EMAIL || "";
 const CF_API_KEY = process.env.CF_API_KEY || "";
 const PORT = process.env.PORT || 3000;
 const CF_BASE_URL = "https://api.cloudflare.com/client/v4";
-
 const sessions = new Map<string, Response>();
 
 function getAuthHeaders(): Record<string, string> {
-  if (CF_AUTH_TYPE === "global_key") {
-    return { "X-Auth-Email": CF_API_EMAIL, "X-Auth-Key": CF_API_KEY, "Content-Type": "application/json" };
-  }
+  if (CF_AUTH_TYPE === "global_key") return { "X-Auth-Email": CF_API_EMAIL, "X-Auth-Key": CF_API_KEY, "Content-Type": "application/json" };
   return { "Authorization": `Bearer ${CF_API_TOKEN}`, "Content-Type": "application/json" };
 }
 
 async function cfRequest(endpoint: string, method = "GET", body?: unknown): Promise<unknown> {
-  const res = await fetch(`${CF_BASE_URL}${endpoint}`, {
-    method,
-    headers: getAuthHeaders(),
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+  const res = await fetch(`${CF_BASE_URL}${endpoint}`, { method, headers: getAuthHeaders(), ...(body ? { body: JSON.stringify(body) } : {}) });
   const data = await res.json() as { success: boolean; errors: unknown[]; result: unknown };
   if (!data.success) throw new Error(`Cloudflare API error: ${JSON.stringify(data.errors)}`);
   return data.result;
 }
 
-// ─────────────────────────────────────────────
-// Tool definitions
-// ─────────────────────────────────────────────
 const tools = [
   // ── Account ──
-  { name: "list_accounts", description: "List all Cloudflare accounts accessible with the current token.", inputSchema: { type: "object", properties: { page: { type: "number" }, per_page: { type: "number" } } } },
+  { name: "list_accounts", description: "List all Cloudflare accounts.", inputSchema: { type: "object", properties: { page: { type: "number" }, per_page: { type: "number" } } } },
   { name: "get_account", description: "Get details of a specific account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
   { name: "get_account_settings", description: "Get settings for an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "list_account_members", description: "List members of an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+
+  // ── Users & Tokens ──
+  { name: "get_user", description: "Get current user details.", inputSchema: { type: "object", properties: {} } },
+  { name: "list_api_tokens", description: "List API tokens for the current user.", inputSchema: { type: "object", properties: {} } },
+  { name: "get_api_token", description: "Get details of an API token.", inputSchema: { type: "object", properties: { token_id: { type: "string" } }, required: ["token_id"] } },
+  { name: "verify_api_token", description: "Verify the current API token is valid.", inputSchema: { type: "object", properties: {} } },
 
   // ── Zones ──
-  { name: "list_zones", description: "List all Cloudflare zones. Supports filtering by name and status.", inputSchema: { type: "object", properties: { name: { type: "string" }, status: { type: "string", description: "active | pending | paused | deactivated" }, per_page: { type: "number" }, page: { type: "number" } } } },
-  { name: "get_zone", description: "Get details of a specific zone by ID.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "get_zone_by_name", description: "Find a zone by domain name and return its ID and details.", inputSchema: { type: "object", properties: { name: { type: "string", description: "e.g. example.com" } }, required: ["name"] } },
+  { name: "list_zones", description: "List all Cloudflare zones. Filter by name and status.", inputSchema: { type: "object", properties: { name: { type: "string" }, status: { type: "string", description: "active | pending | paused | deactivated" }, per_page: { type: "number" }, page: { type: "number" } } } },
+  { name: "get_zone", description: "Get details of a zone by ID.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_zone_by_name", description: "Find a zone by domain name.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "create_zone", description: "Add a new zone to Cloudflare.", inputSchema: { type: "object", properties: { name: { type: "string" }, account_id: { type: "string" }, jump_start: { type: "boolean" }, type: { type: "string", description: "full | partial | secondary" } }, required: ["name", "account_id"] } },
-  { name: "delete_zone", description: "Delete a zone from Cloudflare.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "delete_zone", description: "Delete a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
   { name: "pause_zone", description: "Pause Cloudflare on a zone (DNS-only mode).", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
   { name: "unpause_zone", description: "Resume Cloudflare proxy on a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_zone_analytics", description: "Get zone analytics summary (requests, bandwidth, threats, pageviews).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, since: { type: "string" }, until: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_zone_analytics_by_time", description: "Get zone analytics grouped by time interval.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, since: { type: "string" }, until: { type: "string" }, time_delta: { type: "string", description: "year | quarter | month | week | day | hour | dekaminute | minute" } }, required: ["zone_id"] } },
 
   // ── Zone Settings ──
   { name: "get_zone_settings", description: "Get all settings for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "get_zone_setting", description: "Get a single zone setting by name.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, setting: { type: "string", description: "e.g. ssl, always_https, security_level, browser_cache_ttl, minify, http2, http3, brotli, websockets" } }, required: ["zone_id", "setting"] } },
-  { name: "update_zone_setting", description: "Update a zone setting (e.g. ssl, always_https, security_level, browser_cache_ttl, minify, http2, http3, brotli, websockets, development_mode, rocket_loader, polish, mirage, hotlink_protection).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, setting: { type: "string" }, value: { description: "New value (string, number, object, or boolean)" } }, required: ["zone_id", "setting", "value"] } },
+  { name: "get_zone_setting", description: "Get a single zone setting by name (e.g. ssl, always_https, security_level).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, setting: { type: "string" } }, required: ["zone_id", "setting"] } },
+  { name: "update_zone_setting", description: "Update a zone setting.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, setting: { type: "string" }, value: {} }, required: ["zone_id", "setting", "value"] } },
 
   // ── DNS Records ──
-  { name: "list_dns_records", description: "List DNS records for a zone. Filter by type and name.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, type: { type: "string", description: "A | AAAA | CNAME | MX | TXT | NS | SRV | CAA | PTR | SOA" }, name: { type: "string" }, content: { type: "string" }, per_page: { type: "number" }, page: { type: "number" } }, required: ["zone_id"] } },
+  { name: "list_dns_records", description: "List DNS records for a zone. Filter by type and name.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, type: { type: "string" }, name: { type: "string" }, content: { type: "string" }, per_page: { type: "number" }, page: { type: "number" } }, required: ["zone_id"] } },
   { name: "get_dns_record", description: "Get a specific DNS record by ID.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, record_id: { type: "string" } }, required: ["zone_id", "record_id"] } },
-  { name: "create_dns_record", description: "Create a DNS record.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, type: { type: "string" }, name: { type: "string", description: "Use @ for root" }, content: { type: "string" }, ttl: { type: "number", description: "1 = auto" }, proxied: { type: "boolean" }, priority: { type: "number", description: "MX/SRV only" }, comment: { type: "string" } }, required: ["zone_id", "type", "name", "content"] } },
+  { name: "create_dns_record", description: "Create a DNS record (A, AAAA, CNAME, MX, TXT, NS, SRV, CAA, etc.).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, type: { type: "string" }, name: { type: "string", description: "Use @ for root" }, content: { type: "string" }, ttl: { type: "number", description: "1 = auto" }, proxied: { type: "boolean" }, priority: { type: "number", description: "MX/SRV only" }, comment: { type: "string" } }, required: ["zone_id", "type", "name", "content"] } },
   { name: "update_dns_record", description: "Update an existing DNS record.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, record_id: { type: "string" }, type: { type: "string" }, name: { type: "string" }, content: { type: "string" }, ttl: { type: "number" }, proxied: { type: "boolean" }, comment: { type: "string" } }, required: ["zone_id", "record_id"] } },
   { name: "delete_dns_record", description: "Delete a DNS record.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, record_id: { type: "string" } }, required: ["zone_id", "record_id"] } },
   { name: "export_dns_records", description: "Export DNS records as BIND zone file.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_dns_analytics", description: "Get DNS query analytics for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, dimensions: { type: "array", items: { type: "string" } }, metrics: { type: "array", items: { type: "string" } }, since: { type: "string" }, until: { type: "string" }, limit: { type: "number" } }, required: ["zone_id"] } },
 
   // ── Cache ──
   { name: "purge_cache_all", description: "Purge all cached files for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
@@ -82,27 +70,35 @@ const tools = [
 
   // ── SSL/TLS ──
   { name: "get_ssl_settings", description: "Get SSL/TLS mode for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "update_ssl_settings", description: "Update SSL/TLS mode (off | flexible | full | strict).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, value: { type: "string", description: "off | flexible | full | strict" } }, required: ["zone_id", "value"] } },
+  { name: "update_ssl_settings", description: "Update SSL/TLS mode (off | flexible | full | strict).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, value: { type: "string" } }, required: ["zone_id", "value"] } },
   { name: "list_certificates", description: "List SSL certificates for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
   { name: "get_certificate", description: "Get a specific SSL certificate.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, cert_id: { type: "string" } }, required: ["zone_id", "cert_id"] } },
   { name: "delete_certificate", description: "Delete an SSL certificate.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, cert_id: { type: "string" } }, required: ["zone_id", "cert_id"] } },
   { name: "get_tls_1_3", description: "Get TLS 1.3 setting for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "update_tls_1_3", description: "Enable or disable TLS 1.3.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, value: { type: "string", description: "on | off | zrt" } }, required: ["zone_id", "value"] } },
+  { name: "update_tls_1_3", description: "Enable or disable TLS 1.3 (on | off | zrt).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, value: { type: "string" } }, required: ["zone_id", "value"] } },
 
   // ── Page Rules ──
-  { name: "list_page_rules", description: "List page rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, status: { type: "string", description: "active | disabled" }, order: { type: "string" }, direction: { type: "string" } }, required: ["zone_id"] } },
+  { name: "list_page_rules", description: "List page rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, status: { type: "string" }, order: { type: "string" }, direction: { type: "string" } }, required: ["zone_id"] } },
   { name: "get_page_rule", description: "Get a specific page rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
-  { name: "create_page_rule", description: "Create a page rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, targets: { type: "array", description: "Array of URL match targets" }, actions: { type: "array", description: "Array of actions to apply" }, status: { type: "string", description: "active | disabled" }, priority: { type: "number" } }, required: ["zone_id", "targets", "actions"] } },
+  { name: "create_page_rule", description: "Create a page rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, targets: { type: "array" }, actions: { type: "array" }, status: { type: "string" }, priority: { type: "number" } }, required: ["zone_id", "targets", "actions"] } },
   { name: "update_page_rule", description: "Update a page rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" }, targets: { type: "array" }, actions: { type: "array" }, status: { type: "string" }, priority: { type: "number" } }, required: ["zone_id", "rule_id"] } },
   { name: "delete_page_rule", description: "Delete a page rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
 
-  // ── Firewall / WAF ──
-  { name: "list_firewall_rules", description: "List firewall rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, per_page: { type: "number" }, page: { type: "number" } }, required: ["zone_id"] } },
-  { name: "get_firewall_rule", description: "Get a specific firewall rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
-  { name: "create_firewall_rule", description: "Create a firewall rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, filter: { type: "object", description: "Filter with expression, e.g. { expression: 'ip.src eq 1.2.3.4' }" }, action: { type: "string", description: "block | challenge | js_challenge | managed_challenge | allow | log | bypass" }, description: { type: "string" }, priority: { type: "number" } }, required: ["zone_id", "filter", "action"] } },
-  { name: "update_firewall_rule", description: "Update a firewall rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" }, action: { type: "string" }, description: { type: "string" }, paused: { type: "boolean" } }, required: ["zone_id", "rule_id"] } },
-  { name: "delete_firewall_rule", description: "Delete a firewall rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
-  { name: "list_ip_access_rules", description: "List IP access rules (IP block/allow list) for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, mode: { type: "string", description: "block | challenge | whitelist | js_challenge" }, per_page: { type: "number" } }, required: ["zone_id"] } },
+  // ── WAF / Rulesets (New API) ──
+  { name: "list_zone_rulesets", description: "List all rulesets for a zone (WAF custom rules, transform rules, config rules, etc.).", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_zone_ruleset", description: "Get a specific ruleset by ID for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, ruleset_id: { type: "string" } }, required: ["zone_id", "ruleset_id"] } },
+  { name: "get_zone_ruleset_phase", description: "Get the ruleset for a specific phase (e.g. http_request_firewall_custom, http_request_transform, http_response_headers_transform, http_ratelimit, http_request_cache_settings).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, phase: { type: "string" } }, required: ["zone_id", "phase"] } },
+  { name: "update_zone_ruleset_phase", description: "Replace all rules in a ruleset phase for a zone. Each rule has: action, expression, description, enabled.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, phase: { type: "string" }, rules: { type: "array" } }, required: ["zone_id", "phase", "rules"] } },
+  { name: "list_account_rulesets", description: "List all rulesets for an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_account_ruleset_phase", description: "Get the ruleset for a specific phase at account level.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, phase: { type: "string" } }, required: ["account_id", "phase"] } },
+
+  // ── Firewall (Legacy) ──
+  { name: "list_firewall_rules", description: "List legacy firewall rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, per_page: { type: "number" }, page: { type: "number" } }, required: ["zone_id"] } },
+  { name: "get_firewall_rule", description: "Get a specific legacy firewall rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
+  { name: "create_firewall_rule", description: "Create a legacy firewall rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, filter: { type: "object" }, action: { type: "string", description: "block | challenge | js_challenge | managed_challenge | allow | log | bypass" }, description: { type: "string" }, priority: { type: "number" } }, required: ["zone_id", "filter", "action"] } },
+  { name: "update_firewall_rule", description: "Update a legacy firewall rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" }, action: { type: "string" }, description: { type: "string" }, paused: { type: "boolean" } }, required: ["zone_id", "rule_id"] } },
+  { name: "delete_firewall_rule", description: "Delete a legacy firewall rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
+  { name: "list_ip_access_rules", description: "List IP access rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, mode: { type: "string" }, per_page: { type: "number" } }, required: ["zone_id"] } },
   { name: "create_ip_access_rule", description: "Create an IP access rule to block, allow, or challenge an IP/range/country/ASN.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, mode: { type: "string", description: "block | challenge | whitelist | js_challenge" }, configuration: { type: "object", description: "{ target: 'ip'|'ip_range'|'country'|'asn', value: '1.2.3.4' }" }, notes: { type: "string" } }, required: ["zone_id", "mode", "configuration"] } },
   { name: "delete_ip_access_rule", description: "Delete an IP access rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
   { name: "list_waf_packages", description: "List WAF rule packages for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
@@ -111,16 +107,82 @@ const tools = [
   // ── Rate Limiting ──
   { name: "list_rate_limits", description: "List rate limit rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, per_page: { type: "number" } }, required: ["zone_id"] } },
   { name: "get_rate_limit", description: "Get a specific rate limit rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
-  { name: "create_rate_limit", description: "Create a rate limit rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, match: { type: "object", description: "URL and request match conditions" }, threshold: { type: "number" }, period: { type: "number" }, action: { type: "object", description: "Action object with mode: simulate|ban|challenge|js_challenge" }, description: { type: "string" }, disabled: { type: "boolean" } }, required: ["zone_id", "match", "threshold", "period", "action"] } },
+  { name: "create_rate_limit", description: "Create a rate limit rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, match: { type: "object" }, threshold: { type: "number" }, period: { type: "number" }, action: { type: "object", description: "{ mode: simulate|ban|challenge|js_challenge }" }, description: { type: "string" }, disabled: { type: "boolean" } }, required: ["zone_id", "match", "threshold", "period", "action"] } },
   { name: "delete_rate_limit", description: "Delete a rate limit rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
+
+  // ── Bot Management ──
+  { name: "get_bot_management", description: "Get Bot Management settings for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "update_bot_management", description: "Update Bot Management settings for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, enable_js: { type: "boolean" }, fight_mode: { type: "boolean" }, session_score: { type: "boolean" }, auto_update_model: { type: "boolean" } }, required: ["zone_id"] } },
+
+  // ── Waiting Room ──
+  { name: "list_waiting_rooms", description: "List all waiting rooms for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_waiting_room", description: "Get a specific waiting room.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, waiting_room_id: { type: "string" } }, required: ["zone_id", "waiting_room_id"] } },
+  { name: "create_waiting_room", description: "Create a waiting room for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, name: { type: "string" }, host: { type: "string" }, path: { type: "string", description: "URL path (default: /)" }, total_active_users: { type: "number" }, new_users_per_minute: { type: "number" }, session_duration: { type: "number" }, enabled: { type: "boolean" } }, required: ["zone_id", "name", "host", "total_active_users", "new_users_per_minute"] } },
+  { name: "update_waiting_room", description: "Update a waiting room.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, waiting_room_id: { type: "string" }, name: { type: "string" }, host: { type: "string" }, path: { type: "string" }, total_active_users: { type: "number" }, new_users_per_minute: { type: "number" }, enabled: { type: "boolean" } }, required: ["zone_id", "waiting_room_id"] } },
+  { name: "delete_waiting_room", description: "Delete a waiting room.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, waiting_room_id: { type: "string" } }, required: ["zone_id", "waiting_room_id"] } },
+  { name: "get_waiting_room_status", description: "Get current status of a waiting room (queued users, active users).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, waiting_room_id: { type: "string" } }, required: ["zone_id", "waiting_room_id"] } },
+
+  // ── Health Checks ──
+  { name: "list_health_checks", description: "List all health checks for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_health_check", description: "Get a specific health check.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, health_check_id: { type: "string" } }, required: ["zone_id", "health_check_id"] } },
+  { name: "create_health_check", description: "Create a health check.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, name: { type: "string" }, address: { type: "string" }, type: { type: "string", description: "HTTP | HTTPS | TCP" }, path: { type: "string" }, port: { type: "number" }, interval: { type: "number" }, retries: { type: "number" }, timeout: { type: "number" }, method: { type: "string", description: "GET | HEAD" }, enabled: { type: "boolean" } }, required: ["zone_id", "name", "address"] } },
+  { name: "update_health_check", description: "Update a health check.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, health_check_id: { type: "string" }, name: { type: "string" }, address: { type: "string" }, enabled: { type: "boolean" } }, required: ["zone_id", "health_check_id"] } },
+  { name: "delete_health_check", description: "Delete a health check.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, health_check_id: { type: "string" } }, required: ["zone_id", "health_check_id"] } },
+
+  // ── Load Balancers ──
+  { name: "list_load_balancers", description: "List load balancers for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_load_balancer", description: "Get a specific load balancer.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, lb_id: { type: "string" } }, required: ["zone_id", "lb_id"] } },
+  { name: "list_lb_pools", description: "List load balancer origin pools.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_lb_pool", description: "Get a specific load balancer pool.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, pool_id: { type: "string" } }, required: ["account_id", "pool_id"] } },
+  { name: "list_lb_monitors", description: "List load balancer health monitors.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+
+  // ── Spectrum ──
+  { name: "list_spectrum_apps", description: "List Spectrum applications for a zone (TCP/UDP proxying).", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_spectrum_app", description: "Get a specific Spectrum application.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, app_id: { type: "string" } }, required: ["zone_id", "app_id"] } },
+  { name: "create_spectrum_app", description: "Create a Spectrum application.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, protocol: { type: "string", description: "e.g. tcp/22, udp/1194" }, dns: { type: "object", description: "{ type: 'CNAME', name: 'ssh.example.com' }" }, origin_dns: { type: "object", description: "{ name: 'origin.example.com' }" }, origin_port: { type: "number" }, ip_firewall: { type: "boolean" }, proxy_protocol: { type: "string", description: "off | v1 | v2 | simple" } }, required: ["zone_id", "protocol", "dns", "origin_dns", "origin_port"] } },
+  { name: "update_spectrum_app", description: "Update a Spectrum application.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, app_id: { type: "string" }, protocol: { type: "string" }, ip_firewall: { type: "boolean" }, proxy_protocol: { type: "string" } }, required: ["zone_id", "app_id"] } },
+  { name: "delete_spectrum_app", description: "Delete a Spectrum application.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, app_id: { type: "string" } }, required: ["zone_id", "app_id"] } },
+
+  // ── Redirects / Bulk Redirects ──
+  { name: "list_redirect_rules", description: "List redirect rules/rulesets for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "list_bulk_redirect_lists", description: "List bulk redirect lists in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_bulk_redirect_list", description: "Get a specific bulk redirect list.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, list_id: { type: "string" } }, required: ["account_id", "list_id"] } },
+  { name: "list_bulk_redirect_items", description: "List items in a bulk redirect list.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, list_id: { type: "string" } }, required: ["account_id", "list_id"] } },
+
+  // ── Notifications ──
+  { name: "list_notification_policies", description: "List all notification/alert policies for an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_notification_policy", description: "Get a specific notification policy.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, policy_id: { type: "string" } }, required: ["account_id", "policy_id"] } },
+  { name: "create_notification_policy", description: "Create a notification/alert policy.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, alert_type: { type: "string", description: "e.g. dos_attack_l7, health_check_status_notification, real_origin_monitoring, workers_alert" }, enabled: { type: "boolean" }, mechanisms: { type: "object", description: "{ email: [{id: 'email@example.com'}], webhooks: [{id: 'webhook-id'}] }" }, filters: { type: "object" } }, required: ["account_id", "name", "alert_type", "mechanisms"] } },
+  { name: "update_notification_policy", description: "Update a notification policy.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, policy_id: { type: "string" }, name: { type: "string" }, enabled: { type: "boolean" }, mechanisms: { type: "object" }, filters: { type: "object" } }, required: ["account_id", "policy_id"] } },
+  { name: "delete_notification_policy", description: "Delete a notification policy.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, policy_id: { type: "string" } }, required: ["account_id", "policy_id"] } },
+  { name: "list_notification_webhooks", description: "List notification webhook destinations.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "create_notification_webhook", description: "Create a notification webhook destination.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, url: { type: "string" }, secret: { type: "string" } }, required: ["account_id", "name", "url"] } },
+
+  // ── Logpush ──
+  { name: "list_logpush_jobs", description: "List all Logpush jobs for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "list_account_logpush_jobs", description: "List all Logpush jobs for an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_logpush_job", description: "Get a specific Logpush job.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, job_id: { type: "number" } }, required: ["zone_id", "job_id"] } },
+  { name: "create_logpush_job", description: "Create a Logpush job to export logs to S3, R2, Splunk, Sumo Logic, etc.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, name: { type: "string" }, destination_conf: { type: "string", description: "e.g. s3://bucket/path?region=us-east-1 or r2://bucket/path?account-id=abc" }, dataset: { type: "string", description: "http_requests | firewall_events | nel_reports | spectrum_events | dns_logs" }, logpull_options: { type: "string" }, enabled: { type: "boolean" } }, required: ["zone_id", "destination_conf", "dataset"] } },
+  { name: "update_logpush_job", description: "Update a Logpush job.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, job_id: { type: "number" }, destination_conf: { type: "string" }, enabled: { type: "boolean" }, logpull_options: { type: "string" } }, required: ["zone_id", "job_id"] } },
+  { name: "delete_logpush_job", description: "Delete a Logpush job.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, job_id: { type: "number" } }, required: ["zone_id", "job_id"] } },
 
   // ── Workers ──
   { name: "list_workers", description: "List all Workers scripts in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
   { name: "get_worker", description: "Get a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" } }, required: ["account_id", "script_name"] } },
   { name: "delete_worker", description: "Delete a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" } }, required: ["account_id", "script_name"] } },
   { name: "list_worker_routes", description: "List Worker routes for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "create_worker_route", description: "Create a Worker route for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, pattern: { type: "string", description: "URL pattern, e.g. example.com/api/*" }, script: { type: "string", description: "Worker script name" } }, required: ["zone_id", "pattern"] } },
+  { name: "create_worker_route", description: "Create a Worker route for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, pattern: { type: "string" }, script: { type: "string" } }, required: ["zone_id", "pattern"] } },
   { name: "delete_worker_route", description: "Delete a Worker route.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, route_id: { type: "string" } }, required: ["zone_id", "route_id"] } },
+  { name: "list_worker_secrets", description: "List secrets for a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" } }, required: ["account_id", "script_name"] } },
+  { name: "put_worker_secret", description: "Set a secret for a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" }, secret_name: { type: "string" }, text: { type: "string" } }, required: ["account_id", "script_name", "secret_name", "text"] } },
+  { name: "delete_worker_secret", description: "Delete a secret from a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" }, secret_name: { type: "string" } }, required: ["account_id", "script_name", "secret_name"] } },
+  { name: "list_worker_cron_triggers", description: "List cron triggers for a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" } }, required: ["account_id", "script_name"] } },
+  { name: "update_worker_cron_triggers", description: "Update cron triggers for a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" }, crons: { type: "array", description: "Array of {cron: '*/5 * * * *'} objects" } }, required: ["account_id", "script_name", "crons"] } },
+  { name: "get_worker_subdomain", description: "Get the workers.dev subdomain for an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+
+  // ── Durable Objects ──
+  { name: "list_durable_object_namespaces", description: "List Durable Object namespaces in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "list_durable_objects", description: "List Durable Objects within a namespace.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, namespace_id: { type: "string" }, limit: { type: "number" }, cursor: { type: "string" } }, required: ["account_id", "namespace_id"] } },
 
   // ── KV Storage ──
   { name: "list_kv_namespaces", description: "List all KV namespaces in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, per_page: { type: "number" } }, required: ["account_id"] } },
@@ -131,36 +193,86 @@ const tools = [
   { name: "put_kv_value", description: "Set a KV key-value pair.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, namespace_id: { type: "string" }, key: { type: "string" }, value: { type: "string" }, expiration_ttl: { type: "number" } }, required: ["account_id", "namespace_id", "key", "value"] } },
   { name: "delete_kv_key", description: "Delete a KV key.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, namespace_id: { type: "string" }, key: { type: "string" } }, required: ["account_id", "namespace_id", "key"] } },
 
+  // ── Queues ──
+  { name: "list_queues", description: "List all Cloudflare Queues in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_queue", description: "Get details of a specific Queue.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, queue_id: { type: "string" } }, required: ["account_id", "queue_id"] } },
+  { name: "create_queue", description: "Create a new Queue.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, queue_name: { type: "string" } }, required: ["account_id", "queue_name"] } },
+  { name: "delete_queue", description: "Delete a Queue.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, queue_id: { type: "string" } }, required: ["account_id", "queue_id"] } },
+  { name: "send_queue_messages", description: "Send messages to a Queue.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, queue_id: { type: "string" }, messages: { type: "array", description: "Array of {body: any} message objects" } }, required: ["account_id", "queue_id", "messages"] } },
+  { name: "pull_queue_messages", description: "Pull messages from a Queue for consumption.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, queue_id: { type: "string" }, batch_size: { type: "number", description: "Max messages to pull (default 10, max 100)" }, visibility_timeout_ms: { type: "number" } }, required: ["account_id", "queue_id"] } },
+  { name: "ack_queue_messages", description: "Acknowledge or retry pulled Queue messages.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, queue_id: { type: "string" }, acks: { type: "array", description: "Array of {lease_id} to acknowledge" }, retries: { type: "array", description: "Array of {lease_id, delay_seconds} to retry" } }, required: ["account_id", "queue_id"] } },
+
   // ── R2 Storage ──
   { name: "list_r2_buckets", description: "List all R2 buckets in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_r2_bucket", description: "Get details of an R2 bucket.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" } }, required: ["account_id", "name"] } },
   { name: "create_r2_bucket", description: "Create an R2 bucket.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, location_hint: { type: "string", description: "WNAM | ENAM | WEUR | EEUR | APAC | OC" } }, required: ["account_id", "name"] } },
   { name: "delete_r2_bucket", description: "Delete an R2 bucket.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" } }, required: ["account_id", "name"] } },
-  { name: "get_r2_bucket", description: "Get details of an R2 bucket.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" } }, required: ["account_id", "name"] } },
 
   // ── D1 Databases ──
   { name: "list_d1_databases", description: "List all D1 databases in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, per_page: { type: "number" } }, required: ["account_id"] } },
   { name: "get_d1_database", description: "Get details of a D1 database.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, database_id: { type: "string" } }, required: ["account_id", "database_id"] } },
   { name: "create_d1_database", description: "Create a D1 database.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" } }, required: ["account_id", "name"] } },
   { name: "delete_d1_database", description: "Delete a D1 database.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, database_id: { type: "string" } }, required: ["account_id", "database_id"] } },
-  { name: "query_d1_database", description: "Execute a SQL query on a D1 database.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, database_id: { type: "string" }, sql: { type: "string" }, params: { type: "array", description: "Positional parameters for the SQL query" } }, required: ["account_id", "database_id", "sql"] } },
+  { name: "query_d1_database", description: "Execute a SQL query on a D1 database.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, database_id: { type: "string" }, sql: { type: "string" }, params: { type: "array" } }, required: ["account_id", "database_id", "sql"] } },
 
-  // ── Load Balancers ──
-  { name: "list_load_balancers", description: "List load balancers for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "get_load_balancer", description: "Get a specific load balancer.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, lb_id: { type: "string" } }, required: ["zone_id", "lb_id"] } },
-  { name: "list_lb_pools", description: "List load balancer origin pools.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
-  { name: "get_lb_pool", description: "Get a specific load balancer pool.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, pool_id: { type: "string" } }, required: ["account_id", "pool_id"] } },
-  { name: "list_lb_monitors", description: "List load balancer health monitors.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  // ── Hyperdrive ──
+  { name: "list_hyperdrive_configs", description: "List all Hyperdrive configurations in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_hyperdrive_config", description: "Get a specific Hyperdrive configuration.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, config_id: { type: "string" } }, required: ["account_id", "config_id"] } },
+  { name: "create_hyperdrive_config", description: "Create a Hyperdrive config to accelerate a database.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, origin: { type: "object", description: "{ database, host, port, scheme: 'postgres', user, password }" }, caching: { type: "object", description: "{ disabled: false, max_age: 60, stale_while_revalidate: 15 }" } }, required: ["account_id", "name", "origin"] } },
+  { name: "update_hyperdrive_config", description: "Update a Hyperdrive configuration.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, config_id: { type: "string" }, name: { type: "string" }, origin: { type: "object" }, caching: { type: "object" } }, required: ["account_id", "config_id"] } },
+  { name: "delete_hyperdrive_config", description: "Delete a Hyperdrive configuration.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, config_id: { type: "string" } }, required: ["account_id", "config_id"] } },
 
-  // ── Analytics ──
-  { name: "get_zone_analytics", description: "Get zone analytics summary (requests, bandwidth, threats, pageviews).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, since: { type: "string", description: "ISO 8601 start time, e.g. -1440 (minutes) or date string" }, until: { type: "string", description: "ISO 8601 end time" } }, required: ["zone_id"] } },
-  { name: "get_zone_analytics_by_time", description: "Get zone analytics grouped by time interval.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, since: { type: "string" }, until: { type: "string" }, time_delta: { type: "string", description: "year | quarter | month | week | day | hour | dekaminute | minute" } }, required: ["zone_id"] } },
-  { name: "get_dns_analytics", description: "Get DNS query analytics for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, dimensions: { type: "array", items: { type: "string" } }, metrics: { type: "array", items: { type: "string" } }, since: { type: "string" }, until: { type: "string" }, limit: { type: "number" } }, required: ["zone_id"] } },
+  // ── Vectorize ──
+  { name: "list_vectorize_indexes", description: "List all Vectorize indexes in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_vectorize_index", description: "Get details of a Vectorize index.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, index_name: { type: "string" } }, required: ["account_id", "index_name"] } },
+  { name: "create_vectorize_index", description: "Create a Vectorize index.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, config: { type: "object", description: "{ dimensions: 1536, metric: 'cosine'|'euclidean'|'dot-product' }" } }, required: ["account_id", "name", "config"] } },
+  { name: "delete_vectorize_index", description: "Delete a Vectorize index.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, index_name: { type: "string" } }, required: ["account_id", "index_name"] } },
+  { name: "query_vectorize_index", description: "Query a Vectorize index with a vector.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, index_name: { type: "string" }, vector: { type: "array", items: { type: "number" } }, top_k: { type: "number", description: "Number of results (default 5)" }, filter: { type: "object" }, return_values: { type: "boolean" }, return_metadata: { type: "string", description: "none | indexed | all" } }, required: ["account_id", "index_name", "vector"] } },
+  { name: "upsert_vectorize_vectors", description: "Insert or update vectors in a Vectorize index.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, index_name: { type: "string" }, vectors: { type: "array", description: "Array of {id, values, metadata} objects" } }, required: ["account_id", "index_name", "vectors"] } },
+  { name: "delete_vectorize_vectors", description: "Delete vectors from a Vectorize index by ID.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, index_name: { type: "string" }, ids: { type: "array", items: { type: "string" } } }, required: ["account_id", "index_name", "ids"] } },
 
-  // ── Redirects / Bulk Redirects ──
-  { name: "list_redirect_rules", description: "List redirect rules for a zone (Ruleset-based).", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "list_bulk_redirect_lists", description: "List bulk redirect lists in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
-  { name: "get_bulk_redirect_list", description: "Get a specific bulk redirect list.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, list_id: { type: "string" } }, required: ["account_id", "list_id"] } },
-  { name: "list_bulk_redirect_items", description: "List items in a bulk redirect list.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, list_id: { type: "string" } }, required: ["account_id", "list_id"] } },
+  // ── AI Gateway ──
+  { name: "list_ai_gateways", description: "List AI Gateways for an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_ai_gateway", description: "Get a specific AI Gateway.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, gateway_id: { type: "string" } }, required: ["account_id", "gateway_id"] } },
+  { name: "create_ai_gateway", description: "Create an AI Gateway.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, slug: { type: "string" }, collect_logs: { type: "boolean" }, cache_ttl: { type: "number" } }, required: ["account_id", "name", "slug"] } },
+  { name: "update_ai_gateway", description: "Update an AI Gateway.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, gateway_id: { type: "string" }, name: { type: "string" }, collect_logs: { type: "boolean" }, cache_ttl: { type: "number" } }, required: ["account_id", "gateway_id"] } },
+  { name: "delete_ai_gateway", description: "Delete an AI Gateway.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, gateway_id: { type: "string" } }, required: ["account_id", "gateway_id"] } },
+  { name: "list_ai_gateway_logs", description: "List logs for an AI Gateway.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, gateway_id: { type: "string" }, per_page: { type: "number" }, page: { type: "number" }, cached: { type: "boolean" }, provider: { type: "string" } }, required: ["account_id", "gateway_id"] } },
+
+  // ── Images ──
+  { name: "list_images", description: "List images in Cloudflare Images.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, page: { type: "number" }, per_page: { type: "number" } }, required: ["account_id"] } },
+  { name: "get_image", description: "Get metadata for a specific image.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, image_id: { type: "string" } }, required: ["account_id", "image_id"] } },
+  { name: "update_image", description: "Update image metadata (requireSignedURLs, metadata object).", inputSchema: { type: "object", properties: { account_id: { type: "string" }, image_id: { type: "string" }, require_signed_urls: { type: "boolean" }, metadata: { type: "object" } }, required: ["account_id", "image_id"] } },
+  { name: "delete_image", description: "Delete an image from Cloudflare Images.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, image_id: { type: "string" } }, required: ["account_id", "image_id"] } },
+  { name: "get_images_usage", description: "Get Cloudflare Images usage statistics.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "list_image_variants", description: "List image variants/transformations.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "create_image_variant", description: "Create an image variant (resize/crop configuration).", inputSchema: { type: "object", properties: { account_id: { type: "string" }, variant_id: { type: "string" }, options: { type: "object", description: "{ fit: 'scale-down'|'contain'|'cover'|'crop'|'pad', width: number, height: number, metadata: 'keep'|'copyright'|'none' }" } }, required: ["account_id", "variant_id", "options"] } },
+  { name: "delete_image_variant", description: "Delete an image variant.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, variant_id: { type: "string" } }, required: ["account_id", "variant_id"] } },
+
+  // ── Stream ──
+  { name: "list_stream_videos", description: "List videos in Cloudflare Stream.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, per_page: { type: "number" }, search: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_stream_video", description: "Get details of a specific Stream video.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, video_id: { type: "string" } }, required: ["account_id", "video_id"] } },
+  { name: "delete_stream_video", description: "Delete a Stream video.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, video_id: { type: "string" } }, required: ["account_id", "video_id"] } },
+  { name: "upload_stream_video_url", description: "Upload a video to Cloudflare Stream from a URL.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, url: { type: "string", description: "Public URL of the video to upload" }, meta: { type: "object", description: "Optional metadata e.g. { name: 'My Video' }" } }, required: ["account_id", "url"] } },
+  { name: "list_stream_live_inputs", description: "List live inputs for Cloudflare Stream.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "create_stream_live_input", description: "Create a live input for Cloudflare Stream.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, meta: { type: "object", description: "{ name: 'My Live Stream' }" }, recording: { type: "object", description: "{ mode: 'automatic' | 'off' }" } }, required: ["account_id"] } },
+
+  // ── Pages ──
+  { name: "list_pages_projects", description: "List all Cloudflare Pages projects in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_pages_project", description: "Get details of a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" } }, required: ["account_id", "project_name"] } },
+  { name: "delete_pages_project", description: "Delete a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" } }, required: ["account_id", "project_name"] } },
+  { name: "list_pages_deployments", description: "List deployments for a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, per_page: { type: "number" } }, required: ["account_id", "project_name"] } },
+  { name: "get_pages_deployment", description: "Get details of a specific Pages deployment.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, deployment_id: { type: "string" } }, required: ["account_id", "project_name", "deployment_id"] } },
+  { name: "retry_pages_deployment", description: "Retry a failed Pages deployment.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, deployment_id: { type: "string" } }, required: ["account_id", "project_name", "deployment_id"] } },
+  { name: "rollback_pages_deployment", description: "Rollback to a previous Pages deployment.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, deployment_id: { type: "string" } }, required: ["account_id", "project_name", "deployment_id"] } },
+  { name: "list_pages_domains", description: "List custom domains for a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" } }, required: ["account_id", "project_name"] } },
+  { name: "add_pages_domain", description: "Add a custom domain to a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, domain: { type: "string" } }, required: ["account_id", "project_name", "domain"] } },
+  { name: "delete_pages_domain", description: "Remove a custom domain from a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, domain: { type: "string" } }, required: ["account_id", "project_name", "domain"] } },
+
+  // ── Registrar ──
+  { name: "list_registrar_domains", description: "List domains registered with Cloudflare Registrar.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
+  { name: "get_registrar_domain", description: "Get details of a Cloudflare Registrar domain.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, domain_name: { type: "string" } }, required: ["account_id", "domain_name"] } },
+  { name: "update_registrar_domain", description: "Update Registrar domain settings (auto_renew, locked, privacy).", inputSchema: { type: "object", properties: { account_id: { type: "string" }, domain_name: { type: "string" }, auto_renew: { type: "boolean" }, locked: { type: "boolean" }, privacy: { type: "boolean" } }, required: ["account_id", "domain_name"] } },
 
   // ── Zero Trust / Access ──
   { name: "list_access_applications", description: "List Zero Trust Access applications.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
@@ -169,11 +281,11 @@ const tools = [
   { name: "list_access_groups", description: "List Zero Trust Access groups.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
   { name: "list_access_service_tokens", description: "List Access service tokens.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
   { name: "create_access_service_token", description: "Create an Access service token.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" } }, required: ["account_id", "name"] } },
-  { name: "rotate_access_service_token", description: "Rotate (refresh) an Access service token.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, token_id: { type: "string" } }, required: ["account_id", "token_id"] } },
+  { name: "rotate_access_service_token", description: "Rotate an Access service token.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, token_id: { type: "string" } }, required: ["account_id", "token_id"] } },
   { name: "delete_access_service_token", description: "Delete an Access service token.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, token_id: { type: "string" } }, required: ["account_id", "token_id"] } },
 
   // ── Tunnels ──
-  { name: "list_tunnels", description: "List Cloudflare Tunnels (cloudflared) in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, is_deleted: { type: "boolean" } }, required: ["account_id"] } },
+  { name: "list_tunnels", description: "List Cloudflare Tunnels in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, is_deleted: { type: "boolean" } }, required: ["account_id"] } },
   { name: "get_tunnel", description: "Get details of a specific Cloudflare Tunnel.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, tunnel_id: { type: "string" } }, required: ["account_id", "tunnel_id"] } },
   { name: "create_tunnel", description: "Create a Cloudflare Tunnel.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string" }, tunnel_secret: { type: "string", description: "Base64 encoded 32-byte secret" } }, required: ["account_id", "name", "tunnel_secret"] } },
   { name: "delete_tunnel", description: "Delete a Cloudflare Tunnel.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, tunnel_id: { type: "string" } }, required: ["account_id", "tunnel_id"] } },
@@ -183,44 +295,39 @@ const tools = [
   { name: "get_tunnel_config", description: "Get ingress config for a tunnel.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, tunnel_id: { type: "string" } }, required: ["account_id", "tunnel_id"] } },
   { name: "update_tunnel_config", description: "Update ingress config for a tunnel.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, tunnel_id: { type: "string" }, config: { type: "object", description: "Tunnel config object with ingress rules array" } }, required: ["account_id", "tunnel_id", "config"] } },
 
-  // ── Users & Tokens ──
-  { name: "get_user", description: "Get current user details.", inputSchema: { type: "object", properties: {} } },
-  { name: "list_api_tokens", description: "List API tokens for the current user.", inputSchema: { type: "object", properties: {} } },
-  { name: "get_api_token", description: "Get details of an API token.", inputSchema: { type: "object", properties: { token_id: { type: "string" } }, required: ["token_id"] } },
-  { name: "verify_api_token", description: "Verify the current API token is valid.", inputSchema: { type: "object", properties: {} } },
-  { name: "list_account_members", description: "List members of an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
-
   // ── Email Routing ──
-  { name: "get_email_routing_settings", description: "Get Email Routing settings for a zone (enabled status, name, DNS records required).", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "get_email_routing_settings", description: "Get Email Routing settings for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
   { name: "enable_email_routing", description: "Enable Email Routing for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
   { name: "disable_email_routing", description: "Disable Email Routing for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "list_email_routing_rules", description: "List all Email Routing rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, per_page: { type: "number" }, page: { type: "number" }, enabled: { type: "boolean" } }, required: ["zone_id"] } },
+  { name: "list_email_routing_rules", description: "List all Email Routing rules for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, per_page: { type: "number" }, enabled: { type: "boolean" } }, required: ["zone_id"] } },
   { name: "get_email_routing_rule", description: "Get a specific Email Routing rule by ID.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
-  { name: "create_email_routing_rule", description: "Create an Email Routing rule. Matchers define which emails match (e.g. by 'to' address), actions define what happens (forward, drop, worker).", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, name: { type: "string", description: "Human-readable rule name" }, enabled: { type: "boolean", description: "Whether the rule is active (default: true)" }, matchers: { type: "array", description: "Array of matcher objects, e.g. [{ type: 'literal', field: 'to', value: 'hello@example.com' }]" }, actions: { type: "array", description: "Array of action objects, e.g. [{ type: 'forward', value: ['dest@example.com'] }] or [{ type: 'drop' }] or [{ type: 'worker', value: ['worker-name'] }]" } }, required: ["zone_id", "matchers", "actions"] } },
+  { name: "create_email_routing_rule", description: "Create an Email Routing rule. Matchers: [{type:'literal',field:'to',value:'hello@example.com'}]. Actions: [{type:'forward',value:['dest@example.com']}] or [{type:'drop'}].", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, name: { type: "string" }, enabled: { type: "boolean" }, matchers: { type: "array" }, actions: { type: "array" } }, required: ["zone_id", "matchers", "actions"] } },
   { name: "update_email_routing_rule", description: "Update an existing Email Routing rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" }, name: { type: "string" }, enabled: { type: "boolean" }, matchers: { type: "array" }, actions: { type: "array" } }, required: ["zone_id", "rule_id"] } },
   { name: "delete_email_routing_rule", description: "Delete an Email Routing rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, rule_id: { type: "string" } }, required: ["zone_id", "rule_id"] } },
-  { name: "get_catch_all_rule", description: "Get the catch-all Email Routing rule for a zone (handles emails that match no other rule).", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
-  { name: "update_catch_all_rule", description: "Update the catch-all Email Routing rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, enabled: { type: "boolean" }, name: { type: "string" }, matchers: { type: "array", description: "Catch-all matchers, typically [{ type: 'all' }]" }, actions: { type: "array", description: "Actions: forward, drop, or worker" } }, required: ["zone_id", "actions"] } },
-  { name: "list_email_destination_addresses", description: "List verified destination email addresses for Email Routing in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, per_page: { type: "number" }, page: { type: "number" }, verified: { type: "boolean", description: "Filter by verification status" } }, required: ["account_id"] } },
-  { name: "create_email_destination_address", description: "Add a new destination email address for Email Routing. A verification email will be sent.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, email: { type: "string", description: "The destination email address to add and verify" } }, required: ["account_id", "email"] } },
+  { name: "get_catch_all_rule", description: "Get the catch-all Email Routing rule for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
+  { name: "update_catch_all_rule", description: "Update the catch-all Email Routing rule.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, enabled: { type: "boolean" }, name: { type: "string" }, matchers: { type: "array" }, actions: { type: "array" } }, required: ["zone_id", "actions"] } },
+  { name: "list_email_destination_addresses", description: "List verified destination email addresses for Email Routing.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, per_page: { type: "number" }, verified: { type: "boolean" } }, required: ["account_id"] } },
+  { name: "create_email_destination_address", description: "Add a new destination email address for Email Routing (sends verification email).", inputSchema: { type: "object", properties: { account_id: { type: "string" }, email: { type: "string" } }, required: ["account_id", "email"] } },
   { name: "get_email_destination_address", description: "Get details of a specific Email Routing destination address.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, destination_id: { type: "string" } }, required: ["account_id", "destination_id"] } },
   { name: "delete_email_destination_address", description: "Delete a destination email address from Email Routing.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, destination_id: { type: "string" } }, required: ["account_id", "destination_id"] } },
 ];
 
-// ─────────────────────────────────────────────
-// Tool execution
-// ─────────────────────────────────────────────
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   const a = args;
   switch (name) {
     // Account
-    case "list_accounts": return await cfRequest(`/accounts?page=${a.page || 1}&per_page=${a.per_page || 50}`);
+    case "list_accounts": return await cfRequest(`/accounts?page=${a.page||1}&per_page=${a.per_page||50}`);
     case "get_account": return await cfRequest(`/accounts/${a.account_id}`);
     case "get_account_settings": return await cfRequest(`/accounts/${a.account_id}/settings`);
-
+    case "list_account_members": return await cfRequest(`/accounts/${a.account_id}/members?per_page=50`);
+    // Users & Tokens
+    case "get_user": return await cfRequest("/user");
+    case "list_api_tokens": return await cfRequest("/user/tokens");
+    case "get_api_token": return await cfRequest(`/user/tokens/${a.token_id}`);
+    case "verify_api_token": return await cfRequest("/user/tokens/verify");
     // Zones
     case "list_zones": {
-      let ep = `/zones?page=${a.page || 1}&per_page=${a.per_page || 50}`;
+      let ep = `/zones?page=${a.page||1}&per_page=${a.per_page||50}`;
       if (a.name) ep += `&name=${encodeURIComponent(a.name as string)}`;
       if (a.status) ep += `&status=${a.status}`;
       return await cfRequest(ep);
@@ -228,22 +335,22 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "get_zone": return await cfRequest(`/zones/${a.zone_id}`);
     case "get_zone_by_name": {
       const r = await cfRequest(`/zones?name=${encodeURIComponent(a.name as string)}`) as unknown[];
-      if (!r || !r.length) throw new Error(`Zone not found: ${a.name}`);
+      if (!r?.length) throw new Error(`Zone not found: ${a.name}`);
       return r[0];
     }
-    case "create_zone": return await cfRequest("/zones", "POST", { name: a.name, account: { id: a.account_id }, jump_start: a.jump_start ?? true, type: a.type || "full" });
+    case "create_zone": return await cfRequest("/zones", "POST", { name: a.name, account: { id: a.account_id }, jump_start: a.jump_start??true, type: a.type||"full" });
     case "delete_zone": return await cfRequest(`/zones/${a.zone_id}`, "DELETE");
     case "pause_zone": return await cfRequest(`/zones/${a.zone_id}`, "PATCH", { paused: true });
     case "unpause_zone": return await cfRequest(`/zones/${a.zone_id}`, "PATCH", { paused: false });
-
+    case "get_zone_analytics": return await cfRequest(`/zones/${a.zone_id}/analytics/dashboard?since=${a.since||"-10080"}&until=${a.until||"0"}`);
+    case "get_zone_analytics_by_time": return await cfRequest(`/zones/${a.zone_id}/analytics/dashboard?since=${a.since||"-1440"}&until=${a.until||"0"}&time_delta=${a.time_delta||"hour"}`);
     // Zone Settings
     case "get_zone_settings": return await cfRequest(`/zones/${a.zone_id}/settings`);
     case "get_zone_setting": return await cfRequest(`/zones/${a.zone_id}/settings/${a.setting}`);
     case "update_zone_setting": return await cfRequest(`/zones/${a.zone_id}/settings/${a.setting}`, "PATCH", { value: a.value });
-
-    // DNS Records
+    // DNS
     case "list_dns_records": {
-      let ep = `/zones/${a.zone_id}/dns_records?per_page=${a.per_page || 100}&page=${a.page || 1}`;
+      let ep = `/zones/${a.zone_id}/dns_records?per_page=${a.per_page||100}&page=${a.page||1}`;
       if (a.type) ep += `&type=${a.type}`;
       if (a.name) ep += `&name=${encodeURIComponent(a.name as string)}`;
       if (a.content) ep += `&content=${encodeURIComponent(a.content as string)}`;
@@ -251,29 +358,32 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     }
     case "get_dns_record": return await cfRequest(`/zones/${a.zone_id}/dns_records/${a.record_id}`);
     case "create_dns_record": {
-      const body: Record<string, unknown> = { type: a.type, name: a.name, content: a.content, ttl: a.ttl || 1, proxied: a.proxied ?? false };
-      if (a.priority !== undefined) body.priority = a.priority;
-      if (a.comment) body.comment = a.comment;
-      return await cfRequest(`/zones/${a.zone_id}/dns_records`, "POST", body);
+      const b: Record<string, unknown> = { type: a.type, name: a.name, content: a.content, ttl: a.ttl||1, proxied: a.proxied??false };
+      if (a.priority !== undefined) b.priority = a.priority;
+      if (a.comment) b.comment = a.comment;
+      return await cfRequest(`/zones/${a.zone_id}/dns_records`, "POST", b);
     }
     case "update_dns_record": {
-      const body: Record<string, unknown> = {};
-      ["type","name","content","ttl","proxied","comment"].forEach(k => { if (a[k] !== undefined) body[k] = a[k]; });
-      return await cfRequest(`/zones/${a.zone_id}/dns_records/${a.record_id}`, "PATCH", body);
+      const b: Record<string, unknown> = {};
+      ["type","name","content","ttl","proxied","comment"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/dns_records/${a.record_id}`, "PATCH", b);
     }
     case "delete_dns_record": return await cfRequest(`/zones/${a.zone_id}/dns_records/${a.record_id}`, "DELETE");
     case "export_dns_records": {
       const res = await fetch(`${CF_BASE_URL}/zones/${a.zone_id}/dns_records/export`, { headers: getAuthHeaders() });
       return await res.text();
     }
-
+    case "get_dns_analytics": {
+      const dims = (a.dimensions as string[]||["queryName"]).join(",");
+      const mets = (a.metrics as string[]||["queryCount"]).join(",");
+      return await cfRequest(`/zones/${a.zone_id}/dns_analytics/report?dimensions=${dims}&metrics=${mets}&since=${a.since||"-1440"}&until=${a.until||"0"}&limit=${a.limit||100}`);
+    }
     // Cache
     case "purge_cache_all": return await cfRequest(`/zones/${a.zone_id}/purge_cache`, "POST", { purge_everything: true });
     case "purge_cache_files": return await cfRequest(`/zones/${a.zone_id}/purge_cache`, "POST", { files: a.files });
     case "purge_cache_tags": return await cfRequest(`/zones/${a.zone_id}/purge_cache`, "POST", { tags: a.tags });
     case "purge_cache_hosts": return await cfRequest(`/zones/${a.zone_id}/purge_cache`, "POST", { hosts: a.hosts });
     case "purge_cache_prefixes": return await cfRequest(`/zones/${a.zone_id}/purge_cache`, "POST", { prefixes: a.prefixes });
-
     // SSL/TLS
     case "get_ssl_settings": return await cfRequest(`/zones/${a.zone_id}/settings/ssl`);
     case "update_ssl_settings": return await cfRequest(`/zones/${a.zone_id}/settings/ssl`, "PATCH", { value: a.value });
@@ -282,62 +392,157 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "delete_certificate": return await cfRequest(`/zones/${a.zone_id}/ssl/certificate_packs/${a.cert_id}`, "DELETE");
     case "get_tls_1_3": return await cfRequest(`/zones/${a.zone_id}/settings/tls_1_3`);
     case "update_tls_1_3": return await cfRequest(`/zones/${a.zone_id}/settings/tls_1_3`, "PATCH", { value: a.value });
-
     // Page Rules
     case "list_page_rules": {
-      let ep = `/zones/${a.zone_id}/pagerules?order=${a.order || "priority"}&direction=${a.direction || "asc"}`;
+      let ep = `/zones/${a.zone_id}/pagerules?order=${a.order||"priority"}&direction=${a.direction||"asc"}`;
       if (a.status) ep += `&status=${a.status}`;
       return await cfRequest(ep);
     }
     case "get_page_rule": return await cfRequest(`/zones/${a.zone_id}/pagerules/${a.rule_id}`);
-    case "create_page_rule": return await cfRequest(`/zones/${a.zone_id}/pagerules`, "POST", { targets: a.targets, actions: a.actions, status: a.status || "active", priority: a.priority || 1 });
+    case "create_page_rule": return await cfRequest(`/zones/${a.zone_id}/pagerules`, "POST", { targets: a.targets, actions: a.actions, status: a.status||"active", priority: a.priority||1 });
     case "update_page_rule": {
-      const body: Record<string, unknown> = {};
-      ["targets","actions","status","priority"].forEach(k => { if (a[k] !== undefined) body[k] = a[k]; });
-      return await cfRequest(`/zones/${a.zone_id}/pagerules/${a.rule_id}`, "PATCH", body);
+      const b: Record<string, unknown> = {};
+      ["targets","actions","status","priority"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/pagerules/${a.rule_id}`, "PATCH", b);
     }
     case "delete_page_rule": return await cfRequest(`/zones/${a.zone_id}/pagerules/${a.rule_id}`, "DELETE");
-
-    // Firewall
-    case "list_firewall_rules": return await cfRequest(`/zones/${a.zone_id}/firewall/rules?page=${a.page || 1}&per_page=${a.per_page || 50}`);
+    // WAF Rulesets
+    case "list_zone_rulesets": return await cfRequest(`/zones/${a.zone_id}/rulesets`);
+    case "get_zone_ruleset": return await cfRequest(`/zones/${a.zone_id}/rulesets/${a.ruleset_id}`);
+    case "get_zone_ruleset_phase": return await cfRequest(`/zones/${a.zone_id}/rulesets/phases/${a.phase}/entrypoint`);
+    case "update_zone_ruleset_phase": return await cfRequest(`/zones/${a.zone_id}/rulesets/phases/${a.phase}/entrypoint`, "PUT", { rules: a.rules });
+    case "list_account_rulesets": return await cfRequest(`/accounts/${a.account_id}/rulesets`);
+    case "get_account_ruleset_phase": return await cfRequest(`/accounts/${a.account_id}/rulesets/phases/${a.phase}/entrypoint`);
+    // Firewall (legacy)
+    case "list_firewall_rules": return await cfRequest(`/zones/${a.zone_id}/firewall/rules?page=${a.page||1}&per_page=${a.per_page||50}`);
     case "get_firewall_rule": return await cfRequest(`/zones/${a.zone_id}/firewall/rules/${a.rule_id}`);
-    case "create_firewall_rule": return await cfRequest(`/zones/${a.zone_id}/firewall/rules`, "POST", [{ filter: a.filter, action: a.action, description: a.description || "", priority: a.priority }]);
+    case "create_firewall_rule": return await cfRequest(`/zones/${a.zone_id}/firewall/rules`, "POST", [{ filter: a.filter, action: a.action, description: a.description||"", priority: a.priority }]);
     case "update_firewall_rule": {
-      const body: Record<string, unknown> = { id: a.rule_id };
-      ["action","description","paused"].forEach(k => { if (a[k] !== undefined) body[k] = a[k]; });
-      return await cfRequest(`/zones/${a.zone_id}/firewall/rules/${a.rule_id}`, "PATCH", body);
+      const b: Record<string, unknown> = { id: a.rule_id };
+      ["action","description","paused"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/firewall/rules/${a.rule_id}`, "PATCH", b);
     }
     case "delete_firewall_rule": return await cfRequest(`/zones/${a.zone_id}/firewall/rules/${a.rule_id}`, "DELETE");
     case "list_ip_access_rules": {
-      let ep = `/zones/${a.zone_id}/firewall/access_rules/rules?per_page=${a.per_page || 50}`;
+      let ep = `/zones/${a.zone_id}/firewall/access_rules/rules?per_page=${a.per_page||50}`;
       if (a.mode) ep += `&mode=${a.mode}`;
       return await cfRequest(ep);
     }
-    case "create_ip_access_rule": return await cfRequest(`/zones/${a.zone_id}/firewall/access_rules/rules`, "POST", { mode: a.mode, configuration: a.configuration, notes: a.notes || "" });
+    case "create_ip_access_rule": return await cfRequest(`/zones/${a.zone_id}/firewall/access_rules/rules`, "POST", { mode: a.mode, configuration: a.configuration, notes: a.notes||"" });
     case "delete_ip_access_rule": return await cfRequest(`/zones/${a.zone_id}/firewall/access_rules/rules/${a.rule_id}`, "DELETE");
     case "list_waf_packages": return await cfRequest(`/zones/${a.zone_id}/firewall/waf/packages`);
-    case "list_waf_rules": return await cfRequest(`/zones/${a.zone_id}/firewall/waf/packages/${a.package_id}/rules?per_page=${a.per_page || 100}`);
-
+    case "list_waf_rules": return await cfRequest(`/zones/${a.zone_id}/firewall/waf/packages/${a.package_id}/rules?per_page=${a.per_page||100}`);
     // Rate Limiting
-    case "list_rate_limits": return await cfRequest(`/zones/${a.zone_id}/rate_limits?per_page=${a.per_page || 50}`);
+    case "list_rate_limits": return await cfRequest(`/zones/${a.zone_id}/rate_limits?per_page=${a.per_page||50}`);
     case "get_rate_limit": return await cfRequest(`/zones/${a.zone_id}/rate_limits/${a.rule_id}`);
-    case "create_rate_limit": return await cfRequest(`/zones/${a.zone_id}/rate_limits`, "POST", { match: a.match, threshold: a.threshold, period: a.period, action: a.action, description: a.description || "", disabled: a.disabled || false });
+    case "create_rate_limit": return await cfRequest(`/zones/${a.zone_id}/rate_limits`, "POST", { match: a.match, threshold: a.threshold, period: a.period, action: a.action, description: a.description||"", disabled: a.disabled||false });
     case "delete_rate_limit": return await cfRequest(`/zones/${a.zone_id}/rate_limits/${a.rule_id}`, "DELETE");
-
+    // Bot Management
+    case "get_bot_management": return await cfRequest(`/zones/${a.zone_id}/bot_management`);
+    case "update_bot_management": {
+      const b: Record<string, unknown> = {};
+      ["enable_js","fight_mode","session_score","auto_update_model"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/bot_management`, "PUT", b);
+    }
+    // Waiting Room
+    case "list_waiting_rooms": return await cfRequest(`/zones/${a.zone_id}/waiting_rooms`);
+    case "get_waiting_room": return await cfRequest(`/zones/${a.zone_id}/waiting_rooms/${a.waiting_room_id}`);
+    case "create_waiting_room": {
+      const b: Record<string, unknown> = { name: a.name, host: a.host, total_active_users: a.total_active_users, new_users_per_minute: a.new_users_per_minute };
+      ["path","session_duration","enabled"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/waiting_rooms`, "POST", b);
+    }
+    case "update_waiting_room": {
+      const b: Record<string, unknown> = {};
+      ["name","host","path","total_active_users","new_users_per_minute","session_duration","enabled"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/waiting_rooms/${a.waiting_room_id}`, "PATCH", b);
+    }
+    case "delete_waiting_room": return await cfRequest(`/zones/${a.zone_id}/waiting_rooms/${a.waiting_room_id}`, "DELETE");
+    case "get_waiting_room_status": return await cfRequest(`/zones/${a.zone_id}/waiting_rooms/${a.waiting_room_id}/status`);
+    // Health Checks
+    case "list_health_checks": return await cfRequest(`/zones/${a.zone_id}/healthchecks`);
+    case "get_health_check": return await cfRequest(`/zones/${a.zone_id}/healthchecks/${a.health_check_id}`);
+    case "create_health_check": {
+      const b: Record<string, unknown> = { name: a.name, address: a.address, type: a.type||"HTTPS", enabled: a.enabled??true };
+      ["path","port","interval","retries","timeout","method"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/healthchecks`, "POST", b);
+    }
+    case "update_health_check": {
+      const b: Record<string, unknown> = {};
+      ["name","address","type","enabled","path","port","interval","retries","timeout","method"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/healthchecks/${a.health_check_id}`, "PATCH", b);
+    }
+    case "delete_health_check": return await cfRequest(`/zones/${a.zone_id}/healthchecks/${a.health_check_id}`, "DELETE");
+    // Load Balancers
+    case "list_load_balancers": return await cfRequest(`/zones/${a.zone_id}/load_balancers`);
+    case "get_load_balancer": return await cfRequest(`/zones/${a.zone_id}/load_balancers/${a.lb_id}`);
+    case "list_lb_pools": return await cfRequest(`/accounts/${a.account_id}/load_balancers/pools`);
+    case "get_lb_pool": return await cfRequest(`/accounts/${a.account_id}/load_balancers/pools/${a.pool_id}`);
+    case "list_lb_monitors": return await cfRequest(`/accounts/${a.account_id}/load_balancers/monitors`);
+    // Spectrum
+    case "list_spectrum_apps": return await cfRequest(`/zones/${a.zone_id}/spectrum/apps`);
+    case "get_spectrum_app": return await cfRequest(`/zones/${a.zone_id}/spectrum/apps/${a.app_id}`);
+    case "create_spectrum_app": return await cfRequest(`/zones/${a.zone_id}/spectrum/apps`, "POST", { protocol: a.protocol, dns: a.dns, origin_dns: a.origin_dns, origin_port: a.origin_port, ip_firewall: a.ip_firewall??true, proxy_protocol: a.proxy_protocol||"off" });
+    case "update_spectrum_app": {
+      const b: Record<string, unknown> = {};
+      ["protocol","dns","origin_dns","origin_port","ip_firewall","proxy_protocol"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/spectrum/apps/${a.app_id}`, "PUT", b);
+    }
+    case "delete_spectrum_app": return await cfRequest(`/zones/${a.zone_id}/spectrum/apps/${a.app_id}`, "DELETE");
+    // Redirects
+    case "list_redirect_rules": return await cfRequest(`/zones/${a.zone_id}/rulesets`);
+    case "list_bulk_redirect_lists": return await cfRequest(`/accounts/${a.account_id}/rules/lists?per_page=100`);
+    case "get_bulk_redirect_list": return await cfRequest(`/accounts/${a.account_id}/rules/lists/${a.list_id}`);
+    case "list_bulk_redirect_items": return await cfRequest(`/accounts/${a.account_id}/rules/lists/${a.list_id}/items`);
+    // Notifications
+    case "list_notification_policies": return await cfRequest(`/accounts/${a.account_id}/alerting/v3/policies`);
+    case "get_notification_policy": return await cfRequest(`/accounts/${a.account_id}/alerting/v3/policies/${a.policy_id}`);
+    case "create_notification_policy": return await cfRequest(`/accounts/${a.account_id}/alerting/v3/policies`, "POST", { name: a.name, alert_type: a.alert_type, enabled: a.enabled??true, mechanisms: a.mechanisms, filters: a.filters||{} });
+    case "update_notification_policy": {
+      const b: Record<string, unknown> = {};
+      ["name","enabled","mechanisms","filters"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/accounts/${a.account_id}/alerting/v3/policies/${a.policy_id}`, "PUT", b);
+    }
+    case "delete_notification_policy": return await cfRequest(`/accounts/${a.account_id}/alerting/v3/policies/${a.policy_id}`, "DELETE");
+    case "list_notification_webhooks": return await cfRequest(`/accounts/${a.account_id}/alerting/v3/destinations/webhooks`);
+    case "create_notification_webhook": return await cfRequest(`/accounts/${a.account_id}/alerting/v3/destinations/webhooks`, "POST", { name: a.name, url: a.url, ...(a.secret ? { secret: a.secret } : {}) });
+    // Logpush
+    case "list_logpush_jobs": return await cfRequest(`/zones/${a.zone_id}/logpush/jobs`);
+    case "list_account_logpush_jobs": return await cfRequest(`/accounts/${a.account_id}/logpush/jobs`);
+    case "get_logpush_job": return await cfRequest(`/zones/${a.zone_id}/logpush/jobs/${a.job_id}`);
+    case "create_logpush_job": return await cfRequest(`/zones/${a.zone_id}/logpush/jobs`, "POST", { name: a.name, destination_conf: a.destination_conf, dataset: a.dataset, logpull_options: a.logpull_options||"", enabled: a.enabled??true });
+    case "update_logpush_job": {
+      const b: Record<string, unknown> = {};
+      ["destination_conf","enabled","logpull_options"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/logpush/jobs/${a.job_id}`, "PUT", b);
+    }
+    case "delete_logpush_job": return await cfRequest(`/zones/${a.zone_id}/logpush/jobs/${a.job_id}`, "DELETE");
     // Workers
     case "list_workers": return await cfRequest(`/accounts/${a.account_id}/workers/scripts`);
     case "get_worker": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}`);
     case "delete_worker": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}`, "DELETE");
     case "list_worker_routes": return await cfRequest(`/zones/${a.zone_id}/workers/routes`);
-    case "create_worker_route": return await cfRequest(`/zones/${a.zone_id}/workers/routes`, "POST", { pattern: a.pattern, script: a.script || null });
+    case "create_worker_route": return await cfRequest(`/zones/${a.zone_id}/workers/routes`, "POST", { pattern: a.pattern, script: a.script||null });
     case "delete_worker_route": return await cfRequest(`/zones/${a.zone_id}/workers/routes/${a.route_id}`, "DELETE");
-
+    case "list_worker_secrets": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}/secrets`);
+    case "put_worker_secret": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}/secrets`, "PUT", { name: a.secret_name, text: a.text, type: "secret_text" });
+    case "delete_worker_secret": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}/secrets/${a.secret_name}`, "DELETE");
+    case "list_worker_cron_triggers": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}/schedules`);
+    case "update_worker_cron_triggers": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}/schedules`, "PUT", a.crons);
+    case "get_worker_subdomain": return await cfRequest(`/accounts/${a.account_id}/workers/subdomain`);
+    // Durable Objects
+    case "list_durable_object_namespaces": return await cfRequest(`/accounts/${a.account_id}/workers/durable_objects/namespaces`);
+    case "list_durable_objects": {
+      let ep = `/accounts/${a.account_id}/workers/durable_objects/namespaces/${a.namespace_id}/objects?limit=${a.limit||100}`;
+      if (a.cursor) ep += `&cursor=${a.cursor}`;
+      return await cfRequest(ep);
+    }
     // KV Storage
-    case "list_kv_namespaces": return await cfRequest(`/accounts/${a.account_id}/storage/kv/namespaces?per_page=${a.per_page || 50}`);
+    case "list_kv_namespaces": return await cfRequest(`/accounts/${a.account_id}/storage/kv/namespaces?per_page=${a.per_page||50}`);
     case "create_kv_namespace": return await cfRequest(`/accounts/${a.account_id}/storage/kv/namespaces`, "POST", { title: a.title });
     case "delete_kv_namespace": return await cfRequest(`/accounts/${a.account_id}/storage/kv/namespaces/${a.namespace_id}`, "DELETE");
     case "list_kv_keys": {
-      let ep = `/accounts/${a.account_id}/storage/kv/namespaces/${a.namespace_id}/keys?limit=${a.limit || 1000}`;
+      let ep = `/accounts/${a.account_id}/storage/kv/namespaces/${a.namespace_id}/keys?limit=${a.limit||1000}`;
       if (a.prefix) ep += `&prefix=${encodeURIComponent(a.prefix as string)}`;
       if (a.cursor) ep += `&cursor=${a.cursor}`;
       return await cfRequest(ep);
@@ -348,48 +553,112 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     }
     case "put_kv_value": {
       const url = `${CF_BASE_URL}/accounts/${a.account_id}/storage/kv/namespaces/${a.namespace_id}/values/${encodeURIComponent(a.key as string)}`;
-      const headers = { ...getAuthHeaders(), "Content-Type": "text/plain" };
-      const ep = a.expiration_ttl ? `?expiration_ttl=${a.expiration_ttl}` : "";
-      const res = await fetch(url + ep, { method: "PUT", headers, body: a.value as string });
+      const ep2 = a.expiration_ttl ? `?expiration_ttl=${a.expiration_ttl}` : "";
+      const res = await fetch(url + ep2, { method: "PUT", headers: { ...getAuthHeaders(), "Content-Type": "text/plain" }, body: a.value as string });
       return await res.json();
     }
     case "delete_kv_key": return await cfRequest(`/accounts/${a.account_id}/storage/kv/namespaces/${a.namespace_id}/values/${encodeURIComponent(a.key as string)}`, "DELETE");
-
+    // Queues
+    case "list_queues": return await cfRequest(`/accounts/${a.account_id}/queues`);
+    case "get_queue": return await cfRequest(`/accounts/${a.account_id}/queues/${a.queue_id}`);
+    case "create_queue": return await cfRequest(`/accounts/${a.account_id}/queues`, "POST", { queue_name: a.queue_name });
+    case "delete_queue": return await cfRequest(`/accounts/${a.account_id}/queues/${a.queue_id}`, "DELETE");
+    case "send_queue_messages": return await cfRequest(`/accounts/${a.account_id}/queues/${a.queue_id}/messages`, "POST", { messages: a.messages });
+    case "pull_queue_messages": return await cfRequest(`/accounts/${a.account_id}/queues/${a.queue_id}/messages/pull`, "POST", { batch_size: a.batch_size||10, visibility_timeout_ms: a.visibility_timeout_ms||30000 });
+    case "ack_queue_messages": return await cfRequest(`/accounts/${a.account_id}/queues/${a.queue_id}/messages/ack`, "POST", { acks: a.acks||[], retries: a.retries||[] });
     // R2
     case "list_r2_buckets": return await cfRequest(`/accounts/${a.account_id}/r2/buckets`);
+    case "get_r2_bucket": return await cfRequest(`/accounts/${a.account_id}/r2/buckets/${a.name}`);
     case "create_r2_bucket": return await cfRequest(`/accounts/${a.account_id}/r2/buckets`, "POST", { name: a.name, ...(a.location_hint ? { locationHint: a.location_hint } : {}) });
     case "delete_r2_bucket": return await cfRequest(`/accounts/${a.account_id}/r2/buckets/${a.name}`, "DELETE");
-    case "get_r2_bucket": return await cfRequest(`/accounts/${a.account_id}/r2/buckets/${a.name}`);
-
     // D1
-    case "list_d1_databases": return await cfRequest(`/accounts/${a.account_id}/d1/database?per_page=${a.per_page || 50}`);
+    case "list_d1_databases": return await cfRequest(`/accounts/${a.account_id}/d1/database?per_page=${a.per_page||50}`);
     case "get_d1_database": return await cfRequest(`/accounts/${a.account_id}/d1/database/${a.database_id}`);
     case "create_d1_database": return await cfRequest(`/accounts/${a.account_id}/d1/database`, "POST", { name: a.name });
     case "delete_d1_database": return await cfRequest(`/accounts/${a.account_id}/d1/database/${a.database_id}`, "DELETE");
-    case "query_d1_database": return await cfRequest(`/accounts/${a.account_id}/d1/database/${a.database_id}/query`, "POST", { sql: a.sql, params: a.params || [] });
-
-    // Load Balancers
-    case "list_load_balancers": return await cfRequest(`/zones/${a.zone_id}/load_balancers`);
-    case "get_load_balancer": return await cfRequest(`/zones/${a.zone_id}/load_balancers/${a.lb_id}`);
-    case "list_lb_pools": return await cfRequest(`/accounts/${a.account_id}/load_balancers/pools`);
-    case "get_lb_pool": return await cfRequest(`/accounts/${a.account_id}/load_balancers/pools/${a.pool_id}`);
-    case "list_lb_monitors": return await cfRequest(`/accounts/${a.account_id}/load_balancers/monitors`);
-
-    // Analytics
-    case "get_zone_analytics": return await cfRequest(`/zones/${a.zone_id}/analytics/dashboard?since=${a.since || "-10080"}&until=${a.until || "0"}&continuous=true`);
-    case "get_zone_analytics_by_time": return await cfRequest(`/zones/${a.zone_id}/analytics/dashboard?since=${a.since || "-1440"}&until=${a.until || "0"}&time_delta=${a.time_delta || "hour"}`);
-    case "get_dns_analytics": {
-      const dims = (a.dimensions as string[] || ["queryName"]).join(",");
-      const mets = (a.metrics as string[] || ["queryCount"]).join(",");
-      return await cfRequest(`/zones/${a.zone_id}/dns_analytics/report?dimensions=${dims}&metrics=${mets}&since=${a.since || "-1440"}&until=${a.until || "0"}&limit=${a.limit || 100}`);
+    case "query_d1_database": return await cfRequest(`/accounts/${a.account_id}/d1/database/${a.database_id}/query`, "POST", { sql: a.sql, params: a.params||[] });
+    // Hyperdrive
+    case "list_hyperdrive_configs": return await cfRequest(`/accounts/${a.account_id}/hyperdrive/configs`);
+    case "get_hyperdrive_config": return await cfRequest(`/accounts/${a.account_id}/hyperdrive/configs/${a.config_id}`);
+    case "create_hyperdrive_config": return await cfRequest(`/accounts/${a.account_id}/hyperdrive/configs`, "POST", { name: a.name, origin: a.origin, ...(a.caching ? { caching: a.caching } : {}) });
+    case "update_hyperdrive_config": {
+      const b: Record<string, unknown> = {};
+      ["name","origin","caching"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/accounts/${a.account_id}/hyperdrive/configs/${a.config_id}`, "PUT", b);
     }
-
-    // Redirects
-    case "list_redirect_rules": return await cfRequest(`/zones/${a.zone_id}/rulesets`);
-    case "list_bulk_redirect_lists": return await cfRequest(`/accounts/${a.account_id}/rules/lists?per_page=100`);
-    case "get_bulk_redirect_list": return await cfRequest(`/accounts/${a.account_id}/rules/lists/${a.list_id}`);
-    case "list_bulk_redirect_items": return await cfRequest(`/accounts/${a.account_id}/rules/lists/${a.list_id}/items`);
-
+    case "delete_hyperdrive_config": return await cfRequest(`/accounts/${a.account_id}/hyperdrive/configs/${a.config_id}`, "DELETE");
+    // Vectorize
+    case "list_vectorize_indexes": return await cfRequest(`/accounts/${a.account_id}/vectorize/v2/indexes`);
+    case "get_vectorize_index": return await cfRequest(`/accounts/${a.account_id}/vectorize/v2/indexes/${a.index_name}`);
+    case "create_vectorize_index": return await cfRequest(`/accounts/${a.account_id}/vectorize/v2/indexes`, "POST", { name: a.name, config: a.config });
+    case "delete_vectorize_index": return await cfRequest(`/accounts/${a.account_id}/vectorize/v2/indexes/${a.index_name}`, "DELETE");
+    case "query_vectorize_index": return await cfRequest(`/accounts/${a.account_id}/vectorize/v2/indexes/${a.index_name}/query`, "POST", { vector: a.vector, topK: a.top_k||5, filter: a.filter, returnValues: a.return_values??false, returnMetadata: a.return_metadata||"none" });
+    case "upsert_vectorize_vectors": {
+      const ndjson = (a.vectors as Array<Record<string, unknown>>).map(v => JSON.stringify(v)).join("\n");
+      const res = await fetch(`${CF_BASE_URL}/accounts/${a.account_id}/vectorize/v2/indexes/${a.index_name}/upsert`, { method: "POST", headers: { ...getAuthHeaders(), "Content-Type": "application/x-ndjson" }, body: ndjson });
+      return await res.json();
+    }
+    case "delete_vectorize_vectors": return await cfRequest(`/accounts/${a.account_id}/vectorize/v2/indexes/${a.index_name}/delete-by-ids`, "POST", { ids: a.ids });
+    // AI Gateway
+    case "list_ai_gateways": return await cfRequest(`/accounts/${a.account_id}/ai-gateway/gateways`);
+    case "get_ai_gateway": return await cfRequest(`/accounts/${a.account_id}/ai-gateway/gateways/${a.gateway_id}`);
+    case "create_ai_gateway": return await cfRequest(`/accounts/${a.account_id}/ai-gateway/gateways`, "POST", { name: a.name, slug: a.slug, collect_logs: a.collect_logs??true, ...(a.cache_ttl ? { cache_ttl: a.cache_ttl } : {}) });
+    case "update_ai_gateway": {
+      const b: Record<string, unknown> = {};
+      ["name","collect_logs","cache_ttl"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/accounts/${a.account_id}/ai-gateway/gateways/${a.gateway_id}`, "PUT", b);
+    }
+    case "delete_ai_gateway": return await cfRequest(`/accounts/${a.account_id}/ai-gateway/gateways/${a.gateway_id}`, "DELETE");
+    case "list_ai_gateway_logs": {
+      let ep = `/accounts/${a.account_id}/ai-gateway/gateways/${a.gateway_id}/logs?per_page=${a.per_page||25}&page=${a.page||1}`;
+      if (a.cached !== undefined) ep += `&cached=${a.cached}`;
+      if (a.provider) ep += `&provider=${a.provider}`;
+      return await cfRequest(ep);
+    }
+    // Images
+    case "list_images": return await cfRequest(`/accounts/${a.account_id}/images/v1?page=${a.page||1}&per_page=${a.per_page||50}`);
+    case "get_image": return await cfRequest(`/accounts/${a.account_id}/images/v1/${a.image_id}`);
+    case "update_image": {
+      const b: Record<string, unknown> = {};
+      if (a.require_signed_urls !== undefined) b.requireSignedURLs = a.require_signed_urls;
+      if (a.metadata) b.metadata = a.metadata;
+      return await cfRequest(`/accounts/${a.account_id}/images/v1/${a.image_id}`, "PATCH", b);
+    }
+    case "delete_image": return await cfRequest(`/accounts/${a.account_id}/images/v1/${a.image_id}`, "DELETE");
+    case "get_images_usage": return await cfRequest(`/accounts/${a.account_id}/images/v1/stats`);
+    case "list_image_variants": return await cfRequest(`/accounts/${a.account_id}/images/v1/variants`);
+    case "create_image_variant": return await cfRequest(`/accounts/${a.account_id}/images/v1/variants`, "POST", { id: a.variant_id, options: a.options });
+    case "delete_image_variant": return await cfRequest(`/accounts/${a.account_id}/images/v1/variants/${a.variant_id}`, "DELETE");
+    // Stream
+    case "list_stream_videos": {
+      let ep = `/accounts/${a.account_id}/stream?per_page=${a.per_page||50}`;
+      if (a.search) ep += `&search=${encodeURIComponent(a.search as string)}`;
+      return await cfRequest(ep);
+    }
+    case "get_stream_video": return await cfRequest(`/accounts/${a.account_id}/stream/${a.video_id}`);
+    case "delete_stream_video": return await cfRequest(`/accounts/${a.account_id}/stream/${a.video_id}`, "DELETE");
+    case "upload_stream_video_url": return await cfRequest(`/accounts/${a.account_id}/stream/copy`, "POST", { url: a.url, meta: a.meta||{} });
+    case "list_stream_live_inputs": return await cfRequest(`/accounts/${a.account_id}/stream/live_inputs`);
+    case "create_stream_live_input": return await cfRequest(`/accounts/${a.account_id}/stream/live_inputs`, "POST", { meta: a.meta||{}, recording: a.recording||{} });
+    // Pages
+    case "list_pages_projects": return await cfRequest(`/accounts/${a.account_id}/pages/projects?per_page=25`);
+    case "get_pages_project": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}`);
+    case "delete_pages_project": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}`, "DELETE");
+    case "list_pages_deployments": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments?per_page=${a.per_page||25}`);
+    case "get_pages_deployment": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments/${a.deployment_id}`);
+    case "retry_pages_deployment": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments/${a.deployment_id}/retry`, "POST");
+    case "rollback_pages_deployment": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments/${a.deployment_id}/rollback`, "POST");
+    case "list_pages_domains": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/domains`);
+    case "add_pages_domain": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/domains`, "POST", { name: a.domain });
+    case "delete_pages_domain": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/domains/${a.domain}`, "DELETE");
+    // Registrar
+    case "list_registrar_domains": return await cfRequest(`/accounts/${a.account_id}/registrar/domains`);
+    case "get_registrar_domain": return await cfRequest(`/accounts/${a.account_id}/registrar/domains/${a.domain_name}`);
+    case "update_registrar_domain": {
+      const b: Record<string, unknown> = {};
+      ["auto_renew","locked","privacy"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/accounts/${a.account_id}/registrar/domains/${a.domain_name}`, "PUT", b);
+    }
     // Zero Trust / Access
     case "list_access_applications": return await cfRequest(`/accounts/${a.account_id}/access/apps`);
     case "get_access_application": return await cfRequest(`/accounts/${a.account_id}/access/apps/${a.app_id}`);
@@ -399,7 +668,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "create_access_service_token": return await cfRequest(`/accounts/${a.account_id}/access/service_tokens`, "POST", { name: a.name });
     case "rotate_access_service_token": return await cfRequest(`/accounts/${a.account_id}/access/service_tokens/${a.token_id}/rotate`, "POST");
     case "delete_access_service_token": return await cfRequest(`/accounts/${a.account_id}/access/service_tokens/${a.token_id}`, "DELETE");
-
     // Tunnels
     case "list_tunnels": {
       let ep = `/accounts/${a.account_id}/cfd_tunnel?per_page=100`;
@@ -415,71 +683,57 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "list_tunnel_routes": return await cfRequest(`/accounts/${a.account_id}/teamnet/routes`);
     case "get_tunnel_config": return await cfRequest(`/accounts/${a.account_id}/cfd_tunnel/${a.tunnel_id}/configurations`);
     case "update_tunnel_config": return await cfRequest(`/accounts/${a.account_id}/cfd_tunnel/${a.tunnel_id}/configurations`, "PUT", { config: a.config });
-
-    // Users & Tokens
-    case "get_user": return await cfRequest("/user");
-    case "list_api_tokens": return await cfRequest("/user/tokens");
-    case "get_api_token": return await cfRequest(`/user/tokens/${a.token_id}`);
-    case "verify_api_token": return await cfRequest("/user/tokens/verify");
-    case "list_account_members": return await cfRequest(`/accounts/${a.account_id}/members?per_page=50`);
-
     // Email Routing
     case "get_email_routing_settings": return await cfRequest(`/zones/${a.zone_id}/email/routing`);
     case "enable_email_routing": return await cfRequest(`/zones/${a.zone_id}/email/routing/enable`, "POST");
     case "disable_email_routing": return await cfRequest(`/zones/${a.zone_id}/email/routing/disable`, "POST");
     case "list_email_routing_rules": {
-      let ep = `/zones/${a.zone_id}/email/routing/rules?per_page=${a.per_page || 50}&page=${a.page || 1}`;
+      let ep = `/zones/${a.zone_id}/email/routing/rules?per_page=${a.per_page||50}`;
       if (a.enabled !== undefined) ep += `&enabled=${a.enabled}`;
       return await cfRequest(ep);
     }
     case "get_email_routing_rule": return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/${a.rule_id}`);
     case "create_email_routing_rule": {
-      const body: Record<string, unknown> = { matchers: a.matchers, actions: a.actions, enabled: a.enabled ?? true };
-      if (a.name) body.name = a.name;
-      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules`, "POST", body);
+      const b: Record<string, unknown> = { matchers: a.matchers, actions: a.actions, enabled: a.enabled??true };
+      if (a.name) b.name = a.name;
+      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules`, "POST", b);
     }
     case "update_email_routing_rule": {
-      const body: Record<string, unknown> = {};
-      ["name","enabled","matchers","actions"].forEach(k => { if (a[k] !== undefined) body[k] = a[k]; });
-      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/${a.rule_id}`, "PUT", body);
+      const b: Record<string, unknown> = {};
+      ["name","enabled","matchers","actions"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/${a.rule_id}`, "PUT", b);
     }
     case "delete_email_routing_rule": return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/${a.rule_id}`, "DELETE");
     case "get_catch_all_rule": return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/catch_all`);
     case "update_catch_all_rule": {
-      const body: Record<string, unknown> = { actions: a.actions, matchers: a.matchers || [{ type: "all" }] };
-      if (a.enabled !== undefined) body.enabled = a.enabled;
-      if (a.name) body.name = a.name;
-      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/catch_all`, "PUT", body);
+      const b: Record<string, unknown> = { actions: a.actions, matchers: a.matchers||[{ type: "all" }] };
+      if (a.enabled !== undefined) b.enabled = a.enabled;
+      if (a.name) b.name = a.name;
+      return await cfRequest(`/zones/${a.zone_id}/email/routing/rules/catch_all`, "PUT", b);
     }
     case "list_email_destination_addresses": {
-      let ep = `/accounts/${a.account_id}/email/routing/addresses?per_page=${a.per_page || 50}&page=${a.page || 1}`;
+      let ep = `/accounts/${a.account_id}/email/routing/addresses?per_page=${a.per_page||50}`;
       if (a.verified !== undefined) ep += `&verified=${a.verified}`;
       return await cfRequest(ep);
     }
     case "create_email_destination_address": return await cfRequest(`/accounts/${a.account_id}/email/routing/addresses`, "POST", { email: a.email });
     case "get_email_destination_address": return await cfRequest(`/accounts/${a.account_id}/email/routing/addresses/${a.destination_id}`);
     case "delete_email_destination_address": return await cfRequest(`/accounts/${a.account_id}/email/routing/addresses/${a.destination_id}`, "DELETE");
-
     default: throw new Error(`Unknown tool: ${name}`);
   }
 }
 
-// ─────────────────────────────────────────────
-// MCP JSON-RPC handler
-// ─────────────────────────────────────────────
 async function handleMcpRequest(request: { jsonrpc: string; id?: unknown; method: string; params?: Record<string, unknown> }): Promise<unknown> {
   const { id, method, params } = request;
   try {
     let result;
     switch (method) {
-      case "initialize":
-        result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "2.1.0" }, capabilities: { tools: {} } };
-        break;
+      case "initialize": result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "3.0.0" }, capabilities: { tools: {} } }; break;
       case "notifications/initialized": return null;
       case "tools/list": result = { tools }; break;
       case "tools/call":
         if (!params) throw new Error("Missing params");
-        result = { content: [{ type: "text", text: JSON.stringify(await executeTool(params.name as string, (params.arguments as Record<string, unknown>) || {}), null, 2) }] };
+        result = { content: [{ type: "text", text: JSON.stringify(await executeTool(params.name as string, (params.arguments as Record<string, unknown>)||{}), null, 2) }] };
         break;
       case "ping": result = {}; break;
       default: throw new Error(`Unknown method: ${method}`);
@@ -492,9 +746,6 @@ async function handleMcpRequest(request: { jsonrpc: string; id?: unknown; method
   }
 }
 
-// ─────────────────────────────────────────────
-// Express routes
-// ─────────────────────────────────────────────
 app.get("/sse", (req: Request, res: Response) => {
   const sessionId = randomUUID();
   res.setHeader("Content-Type", "text/event-stream");
@@ -522,11 +773,11 @@ app.post("/messages", async (req: Request, res: Response) => {
 });
 
 app.get("/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok", version: "2.1.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
+  res.json({ status: "ok", version: "3.0.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
 });
 
 app.get("/", (_req: Request, res: Response) => {
-  res.json({ name: "Cloudflare MCP Server", version: "2.1.0", auth: CF_AUTH_TYPE, tools: tools.map(t => t.name), endpoints: { sse: "/sse", messages: "/messages", health: "/health" } });
+  res.json({ name: "Cloudflare MCP Server", version: "3.0.0", tools: tools.map(t => t.name), total: tools.length });
 });
 
-app.listen(PORT, () => console.log(`Cloudflare MCP Server v2.1.0 on port ${PORT} [${tools.length} tools, auth: ${CF_AUTH_TYPE}]`));
+app.listen(PORT, () => console.log(`Cloudflare MCP Server v3.0.0 on port ${PORT} [${tools.length} tools]`));
