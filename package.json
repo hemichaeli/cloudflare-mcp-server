@@ -1,11 +1,11 @@
 {
   "name": "cloudflare-mcp-server",
-  "version": "3.0.0",
-  "description": "MCP Server for Cloudflare API - full coverage",
+  "version": "3.1.0",
+  "description": "MCP Server for Cloudflare API - full coverage, 217 tools",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js",
+    "build": "node scripts/build.mjs",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts"
   },
