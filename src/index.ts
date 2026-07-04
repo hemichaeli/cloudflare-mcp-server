@@ -1,5 +1,9 @@
 import express, { Request, Response } from "express";
 import { randomUUID } from "crypto";
+import { createRequire } from "module";
+
+const nodeRequire = createRequire(import.meta.url);
+const { hash: blake3hash } = nodeRequire("blake3-wasm") as { hash: (input: string) => Buffer };
 
 const app = express();
 
@@ -14,6 +18,11 @@ const sessions = new Map<string, Response>();
 function getAuthHeaders(): Record<string, string> {
   if (CF_AUTH_TYPE === "global_key") return { "X-Auth-Email": CF_API_EMAIL, "X-Auth-Key": CF_API_KEY, "Content-Type": "application/json" };
   return { "Authorization": `Bearer ${CF_API_TOKEN}`, "Content-Type": "application/json" };
+}
+
+function getAuthHeadersNoCT(): Record<string, string> {
+  if (CF_AUTH_TYPE === "global_key") return { "X-Auth-Email": CF_API_EMAIL, "X-Auth-Key": CF_API_KEY };
+  return { "Authorization": `Bearer ${CF_API_TOKEN}` };
 }
 
 async function cfRequest(endpoint: string, method = "GET", body?: unknown): Promise<unknown> {
@@ -260,9 +269,14 @@ const tools = [
   // ── Pages ──
   { name: "list_pages_projects", description: "List all Cloudflare Pages projects in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
   { name: "get_pages_project", description: "Get details of a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" } }, required: ["account_id", "project_name"] } },
+  { name: "create_pages_project", description: "Create a new Cloudflare Pages project. Optionally connect a GitHub repo via source; omit source for a Direct Upload project (then use deploy_pages_files to publish).", inputSchema: { type: "object", properties: { account_id: { type: "string" }, name: { type: "string", description: "Project name (becomes <name>.pages.dev)" }, production_branch: { type: "string", description: "Default: main" }, build_config: { type: "object", description: "{ build_command: 'npm run build', destination_dir: 'dist', root_dir: '' }" }, source: { type: "object", description: "Git integration: { type: 'github', config: { owner, repo_name, production_branch: 'main', deployments_enabled: true } }" }, deployment_configs: { type: "object", description: "{ production: { env_vars: { KEY: { value: 'x' } }, compatibility_date: '2024-01-01' }, preview: {...} }" } }, required: ["account_id", "name"] } },
+  { name: "update_pages_project", description: "Update a Pages project: build config, git source, env vars (deployment_configs), production branch.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, production_branch: { type: "string" }, build_config: { type: "object" }, source: { type: "object" }, deployment_configs: { type: "object" } }, required: ["account_id", "project_name"] } },
   { name: "delete_pages_project", description: "Delete a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" } }, required: ["account_id", "project_name"] } },
   { name: "list_pages_deployments", description: "List deployments for a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, per_page: { type: "number" } }, required: ["account_id", "project_name"] } },
   { name: "get_pages_deployment", description: "Get details of a specific Pages deployment.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, deployment_id: { type: "string" } }, required: ["account_id", "project_name", "deployment_id"] } },
+  { name: "create_pages_deployment", description: "Trigger a new deployment for a git-connected Pages project (builds and deploys the latest commit on the branch).", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, branch: { type: "string", description: "Branch to deploy (omit for production branch)" } }, required: ["account_id", "project_name"] } },
+  { name: "deploy_pages_files", description: "Direct Upload: publish a new Pages deployment from inline files, no git needed. files is a map of '/path' to content: a plain UTF-8 string, or { content, base64: true, content_type } for binary files. Handles the full Cloudflare upload flow (hashing, missing-asset check, asset upload, manifest deployment) server-side. Returns the deployment with its live URL.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, files: { type: "object", description: "e.g. { '/index.html': '<html>...</html>', '/logo.png': { content: '<base64>', base64: true, content_type: 'image/png' } }" }, branch: { type: "string", description: "Deploy as a preview on this branch (omit for production)" } }, required: ["account_id", "project_name", "files"] } },
+  { name: "purge_pages_build_cache", description: "Purge the build cache for a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" } }, required: ["account_id", "project_name"] } },
   { name: "retry_pages_deployment", description: "Retry a failed Pages deployment.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, deployment_id: { type: "string" } }, required: ["account_id", "project_name", "deployment_id"] } },
   { name: "rollback_pages_deployment", description: "Rollback to a previous Pages deployment.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" }, deployment_id: { type: "string" } }, required: ["account_id", "project_name", "deployment_id"] } },
   { name: "list_pages_domains", description: "List custom domains for a Pages project.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, project_name: { type: "string" } }, required: ["account_id", "project_name"] } },
@@ -311,6 +325,8 @@ const tools = [
   { name: "get_email_destination_address", description: "Get details of a specific Email Routing destination address.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, destination_id: { type: "string" } }, required: ["account_id", "destination_id"] } },
   { name: "delete_email_destination_address", description: "Delete a destination email address from Email Routing.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, destination_id: { type: "string" } }, required: ["account_id", "destination_id"] } },
 ];
+
+const PAGES_MIME: Record<string, string> = { html: "text/html", htm: "text/html", css: "text/css", js: "application/javascript", mjs: "application/javascript", json: "application/json", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", svg: "image/svg+xml", webp: "image/webp", avif: "image/avif", ico: "image/x-icon", txt: "text/plain", md: "text/markdown", xml: "application/xml", pdf: "application/pdf", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf", eot: "application/vnd.ms-fontobject", map: "application/json", webmanifest: "application/manifest+json", mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg", wasm: "application/wasm" };
 
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   const a = args;
@@ -643,9 +659,75 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     // Pages
     case "list_pages_projects": return await cfRequest(`/accounts/${a.account_id}/pages/projects?per_page=25`);
     case "get_pages_project": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}`);
+    case "create_pages_project": {
+      const b: Record<string, unknown> = { name: a.name, production_branch: a.production_branch || "main" };
+      ["build_config","source","deployment_configs"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/accounts/${a.account_id}/pages/projects`, "POST", b);
+    }
+    case "update_pages_project": {
+      const b: Record<string, unknown> = {};
+      ["production_branch","build_config","source","deployment_configs"].forEach(k => { if (a[k] !== undefined) b[k] = a[k]; });
+      return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}`, "PATCH", b);
+    }
     case "delete_pages_project": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}`, "DELETE");
     case "list_pages_deployments": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments?per_page=${a.per_page||25}`);
     case "get_pages_deployment": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments/${a.deployment_id}`);
+    case "create_pages_deployment": {
+      const fd = new FormData();
+      if (a.branch) fd.append("branch", a.branch as string);
+      const res = await fetch(`${CF_BASE_URL}/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments`, { method: "POST", headers: getAuthHeadersNoCT(), body: fd });
+      const data = await res.json() as { success: boolean; errors: unknown[]; result: unknown };
+      if (!data.success) throw new Error(`Cloudflare API error: ${JSON.stringify(data.errors)}`);
+      return data.result;
+    }
+    case "deploy_pages_files": {
+      const filesInput = a.files as Record<string, unknown>;
+      if (!filesInput || Object.keys(filesInput).length === 0) throw new Error("files map is empty");
+      const norm: Array<{ path: string; base64Content: string; contentType: string; hash: string }> = [];
+      for (const [rawPath, v] of Object.entries(filesInput)) {
+        const p = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+        let base64Content: string;
+        let contentType: string | undefined;
+        if (typeof v === "string") {
+          base64Content = Buffer.from(v, "utf8").toString("base64");
+        } else {
+          const o = v as { content: string; base64?: boolean; content_type?: string };
+          if (typeof o.content !== "string") throw new Error(`file ${p}: missing content`);
+          base64Content = o.base64 ? o.content : Buffer.from(o.content, "utf8").toString("base64");
+          contentType = o.content_type;
+        }
+        const lastSeg = p.split("/").pop() || "";
+        const ext = lastSeg.includes(".") ? lastSeg.split(".").pop()!.toLowerCase() : "";
+        const ct = contentType || PAGES_MIME[ext] || "application/octet-stream";
+        const fileHash = blake3hash(base64Content + ext).toString("hex").slice(0, 32);
+        norm.push({ path: p, base64Content, contentType: ct, hash: fileHash });
+      }
+      const jwtResult = await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/upload-token`) as { jwt: string };
+      const jwt = jwtResult.jwt;
+      const jwtHeaders = { "Authorization": `Bearer ${jwt}`, "Content-Type": "application/json" };
+      const missingRes = await fetch(`${CF_BASE_URL}/pages/assets/check-missing`, { method: "POST", headers: jwtHeaders, body: JSON.stringify({ hashes: norm.map(f => f.hash) }) });
+      const missingData = await missingRes.json() as { success: boolean; result: string[]; errors: unknown[] };
+      if (!missingData.success) throw new Error(`Pages check-missing failed: ${JSON.stringify(missingData.errors)}`);
+      const missing = new Set(missingData.result || []);
+      const toUpload = norm.filter(f => missing.has(f.hash));
+      for (let i = 0; i < toUpload.length; i += 40) {
+        const batch = toUpload.slice(i, i + 40).map(f => ({ key: f.hash, value: f.base64Content, metadata: { contentType: f.contentType }, base64: true }));
+        const upRes = await fetch(`${CF_BASE_URL}/pages/assets/upload`, { method: "POST", headers: jwtHeaders, body: JSON.stringify(batch) });
+        const upData = await upRes.json() as { success: boolean; errors: unknown[] };
+        if (!upData.success) throw new Error(`Pages asset upload failed: ${JSON.stringify(upData.errors)}`);
+      }
+      await fetch(`${CF_BASE_URL}/pages/assets/upsert-hashes`, { method: "POST", headers: jwtHeaders, body: JSON.stringify({ hashes: norm.map(f => f.hash) }) }).catch(() => undefined);
+      const manifest: Record<string, string> = {};
+      norm.forEach(f => { manifest[f.path] = f.hash; });
+      const fd = new FormData();
+      fd.append("manifest", JSON.stringify(manifest));
+      if (a.branch) fd.append("branch", a.branch as string);
+      const depRes = await fetch(`${CF_BASE_URL}/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments`, { method: "POST", headers: getAuthHeadersNoCT(), body: fd });
+      const depData = await depRes.json() as { success: boolean; errors: unknown[]; result: unknown };
+      if (!depData.success) throw new Error(`Pages deployment failed: ${JSON.stringify(depData.errors)}`);
+      return depData.result;
+    }
+    case "purge_pages_build_cache": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/purge_build_cache`, "POST");
     case "retry_pages_deployment": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments/${a.deployment_id}/retry`, "POST");
     case "rollback_pages_deployment": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/deployments/${a.deployment_id}/rollback`, "POST");
     case "list_pages_domains": return await cfRequest(`/accounts/${a.account_id}/pages/projects/${a.project_name}/domains`);
@@ -728,7 +810,7 @@ async function handleMcpRequest(request: { jsonrpc: string; id?: unknown; method
   try {
     let result;
     switch (method) {
-      case "initialize": result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "3.0.0" }, capabilities: { tools: {} } }; break;
+      case "initialize": result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "3.2.0" }, capabilities: { tools: {} } }; break;
       case "notifications/initialized": return null;
       case "tools/list": result = { tools }; break;
       case "tools/call":
@@ -773,11 +855,11 @@ app.post("/messages", async (req: Request, res: Response) => {
 });
 
 app.get("/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok", version: "3.0.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
+  res.json({ status: "ok", version: "3.2.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
 });
 
 app.get("/", (_req: Request, res: Response) => {
-  res.json({ name: "Cloudflare MCP Server", version: "3.0.0", tools: tools.map(t => t.name), total: tools.length });
+  res.json({ name: "Cloudflare MCP Server", version: "3.2.0", tools: tools.map(t => t.name), total: tools.length });
 });
 
-app.listen(PORT, () => console.log(`Cloudflare MCP Server v3.0.0 on port ${PORT} [${tools.length} tools]`));
+app.listen(PORT, () => console.log(`Cloudflare MCP Server v3.2.0 on port ${PORT} [${tools.length} tools]`));
