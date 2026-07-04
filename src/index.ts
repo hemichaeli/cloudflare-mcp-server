@@ -179,6 +179,9 @@ const tools = [
   { name: "list_workers", description: "List all Workers scripts in an account.", inputSchema: { type: "object", properties: { account_id: { type: "string" } }, required: ["account_id"] } },
   { name: "get_worker", description: "Get a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" } }, required: ["account_id", "script_name"] } },
   { name: "delete_worker", description: "Delete a Worker script.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" } }, required: ["account_id", "script_name"] } },
+  { name: "upload_worker_script", description: "Upload (create or overwrite) a Worker script from source code. Deploys an ES-module Worker. Pass the full JS/TS module source as `script`. Optional `compatibility_date` (default today), `compatibility_flags`, and `bindings` (array of Cloudflare binding objects, e.g. KV/D1/R2/vars). Requires an API token with Workers Scripts:Edit.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string", description: "Worker name (becomes <name>.<subdomain>.workers.dev if enabled)" }, script: { type: "string", description: "Full ES-module Worker source, e.g. export default { async fetch(req, env) { return new Response('hi'); } }" }, main_module: { type: "string", description: "Module filename (default: worker.js)" }, compatibility_date: { type: "string", description: "e.g. 2024-11-01 (default: today)" }, compatibility_flags: { type: "array", items: { type: "string" } }, bindings: { type: "array", description: "Array of binding objects, e.g. [{type:'kv_namespace',name:'MY_KV',namespace_id:'...'}, {type:'plain_text',name:'API_KEY',text:'val'}]" } }, required: ["account_id", "script_name", "script"] } },
+  { name: "get_worker_content", description: "Get the source code of a Worker script (returns the raw module text).", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" } }, required: ["account_id", "script_name"] } },
+  { name: "enable_worker_subdomain", description: "Enable or disable the workers.dev subdomain route for a Worker (makes it reachable at <name>.<subdomain>.workers.dev).", inputSchema: { type: "object", properties: { account_id: { type: "string" }, script_name: { type: "string" }, enabled: { type: "boolean", description: "true to enable the workers.dev route" } }, required: ["account_id", "script_name", "enabled"] } },
   { name: "list_worker_routes", description: "List Worker routes for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" } }, required: ["zone_id"] } },
   { name: "create_worker_route", description: "Create a Worker route for a zone.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, pattern: { type: "string" }, script: { type: "string" } }, required: ["zone_id", "pattern"] } },
   { name: "delete_worker_route", description: "Delete a Worker route.", inputSchema: { type: "object", properties: { zone_id: { type: "string" }, route_id: { type: "string" } }, required: ["zone_id", "route_id"] } },
@@ -546,6 +549,28 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "list_worker_cron_triggers": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}/schedules`);
     case "update_worker_cron_triggers": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}/schedules`, "PUT", a.crons);
     case "get_worker_subdomain": return await cfRequest(`/accounts/${a.account_id}/workers/subdomain`);
+    case "upload_worker_script": {
+      const mainModule = (a.main_module as string) || "worker.js";
+      const today = new Date().toISOString().slice(0, 10);
+      const metadata: Record<string, unknown> = {
+        main_module: mainModule,
+        compatibility_date: a.compatibility_date || today,
+      };
+      if (a.compatibility_flags) metadata.compatibility_flags = a.compatibility_flags;
+      if (a.bindings) metadata.bindings = a.bindings;
+      const fd = new FormData();
+      fd.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      fd.append(mainModule, new Blob([a.script as string], { type: "application/javascript+module" }), mainModule);
+      const res = await fetch(`${CF_BASE_URL}/accounts/${a.account_id}/workers/scripts/${a.script_name}`, { method: "PUT", headers: getAuthHeadersNoCT(), body: fd });
+      const data = await res.json() as { success: boolean; errors: unknown[]; result: unknown };
+      if (!data.success) throw new Error(`Cloudflare API error: ${JSON.stringify(data.errors)}`);
+      return data.result;
+    }
+    case "get_worker_content": {
+      const res = await fetch(`${CF_BASE_URL}/accounts/${a.account_id}/workers/scripts/${a.script_name}`, { headers: getAuthHeadersNoCT() });
+      return await res.text();
+    }
+    case "enable_worker_subdomain": return await cfRequest(`/accounts/${a.account_id}/workers/scripts/${a.script_name}/subdomain`, "POST", { enabled: a.enabled });
     // Durable Objects
     case "list_durable_object_namespaces": return await cfRequest(`/accounts/${a.account_id}/workers/durable_objects/namespaces`);
     case "list_durable_objects": {
@@ -810,7 +835,7 @@ async function handleMcpRequest(request: { jsonrpc: string; id?: unknown; method
   try {
     let result;
     switch (method) {
-      case "initialize": result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "3.2.0" }, capabilities: { tools: {} } }; break;
+      case "initialize": result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "3.3.0" }, capabilities: { tools: {} } }; break;
       case "notifications/initialized": return null;
       case "tools/list": result = { tools }; break;
       case "tools/call":
@@ -855,11 +880,11 @@ app.post("/messages", async (req: Request, res: Response) => {
 });
 
 app.get("/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok", version: "3.2.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
+  res.json({ status: "ok", version: "3.3.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
 });
 
 app.get("/", (_req: Request, res: Response) => {
-  res.json({ name: "Cloudflare MCP Server", version: "3.2.0", tools: tools.map(t => t.name), total: tools.length });
+  res.json({ name: "Cloudflare MCP Server", version: "3.3.0", tools: tools.map(t => t.name), total: tools.length });
 });
 
-app.listen(PORT, () => console.log(`Cloudflare MCP Server v3.2.0 on port ${PORT} [${tools.length} tools]`));
+app.listen(PORT, () => console.log(`Cloudflare MCP Server v3.3.0 on port ${PORT} [${tools.length} tools]`));
