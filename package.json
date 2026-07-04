@@ -1,7 +1,7 @@
 {
   "name": "cloudflare-mcp-server",
-  "version": "3.1.0",
-  "description": "MCP Server for Cloudflare API - full coverage, 217 tools",
+  "version": "3.2.0",
+  "description": "MCP Server for Cloudflare API - full coverage incl. Pages create/deploy/direct-upload",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -10,7 +10,8 @@
     "dev": "ts-node src/index.ts"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "blake3-wasm": "^2.1.5"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
