@@ -19,6 +19,13 @@ src = src.replace(
   'setupModernRoutes(app, tools, handleMcpRequest, sessions);\n\napp.get("/health"'
 );
 
+// 3. CF API quirk fix: GET /accounts/{id}/pages/projects rejects per_page with error 8000024
+//    (validated 2026-07-04 with cfut_ user tokens). Strip the param.
+src = src.replace(
+  "/pages/projects?per_page=25",
+  "/pages/projects"
+);
+
 mkdirSync("src/__patched__", { recursive: true });
 writeFileSync("src/__patched__/index.ts", src);
 
