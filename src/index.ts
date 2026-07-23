@@ -28,7 +28,20 @@ function getAuthHeadersNoCT(): Record<string, string> {
 async function cfRequest(endpoint: string, method = "GET", body?: unknown): Promise<unknown> {
   const res = await fetch(`${CF_BASE_URL}${endpoint}`, { method, headers: getAuthHeaders(), ...(body ? { body: JSON.stringify(body) } : {}) });
   const data = await res.json() as { success: boolean; errors: unknown[]; result: unknown };
-  if (!data.success) throw new Error(`Cloudflare API error: ${JSON.stringify(data.errors)}`);
+  if (!data.success) {
+    const errStr = JSON.stringify(data.errors);
+    const hint = /"code":(9109|10000)/.test(errStr) ? " | HINT: the main CF_API_TOKEN lacks a permission for this call. Use the create_api_token tool (backed by CF_BOOTSTRAP_TOKEN) to mint a token that includes the missing permission groups, then set it as CF_API_TOKEN on the Railway service (project 68b45790, service fc306544, env 03a48f2b)." : "";
+    throw new Error(`Cloudflare API error: ${errStr}${hint}`);
+  }
+  return data.result;
+}
+
+const CF_BOOTSTRAP_TOKEN = process.env.CF_BOOTSTRAP_TOKEN || "";
+async function bootstrapRequest(endpoint: string, method = "GET", body?: unknown): Promise<unknown> {
+  if (!CF_BOOTSTRAP_TOKEN) throw new Error("CF_BOOTSTRAP_TOKEN is not set on the server environment");
+  const res = await fetch(`${CF_BASE_URL}${endpoint}`, { method, headers: { "Authorization": `Bearer ${CF_BOOTSTRAP_TOKEN}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  const data = await res.json() as { success: boolean; errors: unknown[]; result: unknown };
+  if (!data.success) throw new Error(`Cloudflare API error (bootstrap): ${JSON.stringify(data.errors)}`);
   return data.result;
 }
 
@@ -44,6 +57,8 @@ const tools = [
   { name: "list_api_tokens", description: "List API tokens for the current user.", inputSchema: { type: "object", properties: {} } },
   { name: "get_api_token", description: "Get details of an API token.", inputSchema: { type: "object", properties: { token_id: { type: "string" } }, required: ["token_id"] } },
   { name: "verify_api_token", description: "Verify the current API token is valid.", inputSchema: { type: "object", properties: {} } },
+  { name: "list_token_permission_groups", description: "List all Cloudflare token permission groups (id, name, scopes) via CF_BOOTSTRAP_TOKEN. Use before create_api_token to find exact permission group names.", inputSchema: { type: "object", properties: {} } },
+  { name: "create_api_token", description: "Create a new Cloudflare API token using CF_BOOTSTRAP_TOKEN (a token holding API Tokens:Edit). Pass account_permissions and/or zone_permissions as permission group NAMES exactly as returned by list_token_permission_groups; names are resolved to ids automatically. Zone permissions apply to all zones. Returns the token value ONCE. Use whenever any tool fails with permission errors (codes 9109/10000), then set the returned value as CF_API_TOKEN on Railway.", inputSchema: { type: "object", properties: { name: { type: "string", description: "Token name" }, account_permissions: { type: "array", items: { type: "string" }, description: "Account-scope permission group names" }, zone_permissions: { type: "array", items: { type: "string" }, description: "Zone-scope permission group names (all zones)" }, account_id: { type: "string", description: "Account id for account-scope policy. Defaults to the first account." }, dry_run: { type: "boolean", description: "Resolve and return the policies without creating the token" } }, required: ["name"] } },
 
   // ── Zones ──
   { name: "list_zones", description: "List all Cloudflare zones. Filter by name and status.", inputSchema: { type: "object", properties: { name: { type: "string" }, status: { type: "string", description: "active | pending | paused | deactivated" }, per_page: { type: "number" }, page: { type: "number" } } } },
@@ -344,6 +359,30 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "list_api_tokens": return await cfRequest("/user/tokens");
     case "get_api_token": return await cfRequest(`/user/tokens/${a.token_id}`);
     case "verify_api_token": return await cfRequest("/user/tokens/verify");
+    case "list_token_permission_groups": return await bootstrapRequest("/user/tokens/permission_groups");
+    case "create_api_token": {
+      const groups = await bootstrapRequest("/user/tokens/permission_groups") as Array<{ id: string; name: string; scopes?: string[] }>;
+      const pick = (scope: string) => new Map(groups.filter(g => (g.scopes || [])[0] === scope).map(g => [g.name, g.id]));
+      const acctMap = pick("com.cloudflare.api.account");
+      const zoneMap = pick("com.cloudflare.api.account.zone");
+      const wantA = (a.account_permissions as string[] | undefined) || [];
+      const wantZ = (a.zone_permissions as string[] | undefined) || [];
+      const missA = wantA.filter(n => !acctMap.has(n));
+      const missZ = wantZ.filter(n => !zoneMap.has(n));
+      if (missA.length || missZ.length) throw new Error(`Unknown permission group names. account: ${JSON.stringify(missA)} zone: ${JSON.stringify(missZ)}. Call list_token_permission_groups for exact names.`);
+      if (!wantA.length && !wantZ.length) throw new Error("Provide account_permissions and/or zone_permissions");
+      let accountId = a.account_id as string | undefined;
+      if (!accountId && wantA.length) {
+        const accounts = await bootstrapRequest("/accounts?per_page=5") as Array<{ id: string }>;
+        accountId = accounts[0]?.id;
+        if (!accountId) throw new Error("Could not resolve account_id; pass it explicitly");
+      }
+      const policies: unknown[] = [];
+      if (wantA.length) policies.push({ effect: "allow", resources: { [`com.cloudflare.api.account.${accountId}`]: "*" }, permission_groups: wantA.map(n => ({ id: acctMap.get(n), name: n })) });
+      if (wantZ.length) policies.push({ effect: "allow", resources: { "com.cloudflare.api.account.zone.*": "*" }, permission_groups: wantZ.map(n => ({ id: zoneMap.get(n), name: n })) });
+      if (a.dry_run) return { dry_run: true, name: a.name, policies };
+      return await bootstrapRequest("/user/tokens", "POST", { name: a.name, policies, condition: {} });
+    }
     // Zones
     case "list_zones": {
       let ep = `/zones?page=${a.page||1}&per_page=${a.per_page||50}`;
@@ -835,7 +874,7 @@ async function handleMcpRequest(request: { jsonrpc: string; id?: unknown; method
   try {
     let result;
     switch (method) {
-      case "initialize": result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "3.3.0" }, capabilities: { tools: {} } }; break;
+      case "initialize": result = { protocolVersion: "2024-11-05", serverInfo: { name: "cloudflare-mcp-server", version: "3.4.0" }, capabilities: { tools: {} } }; break;
       case "notifications/initialized": return null;
       case "tools/list": result = { tools }; break;
       case "tools/call":
@@ -880,11 +919,11 @@ app.post("/messages", async (req: Request, res: Response) => {
 });
 
 app.get("/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok", version: "3.3.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
+  res.json({ status: "ok", version: "3.4.0", auth: CF_AUTH_TYPE === "global_key" ? "Global API Key" : "API Token", tools: tools.length, sessions: sessions.size });
 });
 
 app.get("/", (_req: Request, res: Response) => {
-  res.json({ name: "Cloudflare MCP Server", version: "3.3.0", tools: tools.map(t => t.name), total: tools.length });
+  res.json({ name: "Cloudflare MCP Server", version: "3.4.0", tools: tools.map(t => t.name), total: tools.length });
 });
 
 app.listen(PORT, () => console.log(`Cloudflare MCP Server v3.3.0 on port ${PORT} [${tools.length} tools]`));
