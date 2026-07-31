@@ -13,6 +13,13 @@ src = src.replace(
   'import express, { Request, Response } from "express";\nimport { setupModernRoutes } from "../routes.js";'
 );
 
+// 1b. Same relocation fix for the OAuth / auth-gate module: index.ts imports "./mcp-auth.js",
+//     but from src/__patched__/ the correct relative path is ../mcp-auth.js
+src = src.replace(
+  'from "./mcp-auth.js"',
+  'from "../mcp-auth.js"'
+);
+
 // 2. Call setupModernRoutes before the health endpoint
 src = src.replace(
   'app.get("/health"',
