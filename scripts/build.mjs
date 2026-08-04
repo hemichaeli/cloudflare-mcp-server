@@ -29,7 +29,19 @@ patch(
   'import express, { Request, Response } from "express";',
   'import express, { Request, Response } from "express";\n' +
   'import { setupModernRoutes } from "../routes.js";\n' +
-  'import { registerOAuth, requireBearer, authEnabled } from "../mcp-auth.js";'
+  'import { registerOAuth, requireBearer, authEnabled } from "../mcp-auth.js";\n' +
+  'import { installProcessGuards, guardSseSocket } from "../process-guards.js";'
+);
+
+// 1b. Install the process-level crash guards before anything else runs. A dropped SSE
+//     socket surfaces ECONNRESET/EPIPE from a promise with no catch, which Node 18+
+//     turns into an unhandled rejection that kills the process. This server has gone to
+//     CRASHED in production from exactly that.
+patch(
+  "process-guards",
+  "const app = express();",
+  'installProcessGuards("cloudflare-mcp");\n\n' +
+  "const app = express();"
 );
 
 // 2. Public base URL, used for the OAuth issuer and the WWW-Authenticate resource hint.
@@ -49,6 +61,16 @@ patch(
   "gate-sse",
   'app.get("/sse", (req: Request, res: Response) => {',
   'app.get("/sse", requireBearer(BASE_URL), (req: Request, res: Response) => {'
+);
+
+// 3b. Attach socket error handlers to the legacy SSE stream so a dead client cannot raise
+//     an unhandled error. Anchors on the already-gated line produced by "gate-sse" above,
+//     so it must stay ordered after it.
+patch(
+  "guard-sse",
+  'app.get("/sse", requireBearer(BASE_URL), (req: Request, res: Response) => {',
+  'app.get("/sse", requireBearer(BASE_URL), (req: Request, res: Response) => {\n' +
+  '  guardSseSocket(req, res, "sse");'
 );
 
 patch(
@@ -82,8 +104,8 @@ patch(
 );
 
 // 7. Version bump so /health proves the deploy.
-patch("version", 'version: "3.4.0"', 'version: "3.5.0"', { count: 3 });
-patch("version-banner", "v3.3.0 on port", "v3.5.0 on port");
+patch("version", 'version: "3.4.0"', 'version: "3.5.1"', { count: 3 });
+patch("version-banner", "v3.3.0 on port", "v3.5.1 on port");
 
 // 8. CF API quirk fix: GET /accounts/{id}/pages/projects rejects per_page with error 8000024
 //    (validated 2026-07-04 with cfut_ user tokens). Strip the param.
