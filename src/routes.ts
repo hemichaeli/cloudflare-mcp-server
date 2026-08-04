@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { Application, Request, Response } from "express";
 import { requireBearer } from "./mcp-auth.js";
+import { guardSseSocket } from "./process-guards.js";
 
 // Same derivation as index.ts. Kept local so setupModernRoutes' signature is unchanged.
 const BASE_URL =
@@ -36,7 +37,7 @@ export function setupModernRoutes(
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.json({
       name: "Cloudflare MCP Server",
-      version: "3.5.0",
+      version: "3.5.1",
       description: "Full Cloudflare API coverage",
       transport: [
         { type: "sse", url: "/sse" },
@@ -49,6 +50,7 @@ export function setupModernRoutes(
 
   // /mcp/sse - SSE transport on new path
   app.get("/mcp/sse", requireBearer(BASE_URL), (req: Request, res: Response) => {
+    guardSseSocket(req, res, "mcp-sse");
     const sessionId = randomUUID();
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -77,6 +79,7 @@ export function setupModernRoutes(
 
   // POST /mcp - StreamableHTTP transport (modern MCP protocol)
   app.post("/mcp", requireBearer(BASE_URL), async (req: Request, res: Response) => {
+    guardSseSocket(req, res, "mcp-http");
     res.setHeader("Access-Control-Allow-Origin", "*");
     const sessionId = (req.headers["mcp-session-id"] as string) || randomUUID();
     let body = "";
@@ -103,6 +106,7 @@ export function setupModernRoutes(
 
   // GET /mcp - SSE stream for server-initiated messages (StreamableHTTP spec)
   app.get("/mcp", requireBearer(BASE_URL), (req: Request, res: Response) => {
+    guardSseSocket(req, res, "mcp-stream");
     const sessionId = (req.headers["mcp-session-id"] as string) || randomUUID();
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
